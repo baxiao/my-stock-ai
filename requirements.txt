@@ -1,4 +1,4 @@
 streamlit
-akshare
+akshare>=1.13.88
 openai
 pandas
