@@ -2,3 +2,4 @@ streamlit
 akshare
 openai
 pandas
+fpdf2
