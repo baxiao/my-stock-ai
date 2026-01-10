@@ -1,5 +1,5 @@
-streamlit
+streamlit==1.31.0
 akshare>=1.13.88
 openai
 pandas
-streamlit-authenticator
+streamlit-authenticator==0.3.4
