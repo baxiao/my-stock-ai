@@ -1,17 +1,46 @@
 import streamlit as st
+import streamlit_authenticator as stauth
 import akshare as ak
 import pandas as pd
 from openai import OpenAI
 
-# 页面配置
-st.set_page_config(page_title="文哥哥的A股AI分析师", layout="wide")
-st.title("🇨🇳 A股全维度 AI 智能分析系统")
+# --- 1. 用户信息配置 (你可以修改这里的用户名和密码) ---
+names = ["文哥哥"]
+usernames = ["wengege"]
+# 这里的密码是明文，为了演示方便。实际建议用加密后的。
+passwords = ["123456"] 
 
-# --- 1. 配置 DeepSeek API ---
-# 请在此处填入你的 API Key
-# 告诉程序从 Streamlit 的 secrets（私密配置）中读取
-DEEPSEEK_API_KEY = st.secrets["deepseek_api_key"]
-client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+# 创建登录对象
+authenticator = stauth.Authenticate(
+    {"usernames": {usernames[0]: {"name": names[0], "password": passwords[0]}}},
+    "stock_app_cookie", # 随便起个饼干名
+    "signature_key",    # 随便起个签名 key
+    cookie_expiry_days=30
+)
+
+# 渲染登录界面
+name, authentication_status, username = authenticator.login('main')
+
+# --- 2. 判断登录状态 ---
+if authentication_status == False:
+    st.error('用户名或密码错误')
+elif authentication_status == None:
+    st.warning('请输入用户名和密码')
+elif authentication_status:
+    # --- 这里放你原来的所有业务代码 ---
+    
+    with st.sidebar:
+        st.write(f"欢迎你，{name}!")
+        authenticator.logout('退出登录', 'sidebar')
+        
+    st.title("🇨🇳 A股全维度 AI 智能分析系统")
+
+    # 配置 API (从 Secrets 读取)
+    DEEPSEEK_API_KEY = st.secrets["deepseek_api_key"]
+    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+
+    # ... (这里接你之前的侧边栏输入、数据抓取函数和分析逻辑) ...
+    # 注意：原本的所有代码都要往后缩进一个 Tab 键，放在 if authentication_status: 之后
 
 # --- 2. 侧边栏设置 ---
 with st.sidebar:
@@ -112,5 +141,6 @@ if analyze_btn:
         except Exception as e:
 
             st.error(f"分析出错：可能是代码输入有误或API限流。错误信息：{e}")
+
 
 
