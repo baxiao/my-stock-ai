@@ -30,7 +30,24 @@ def get_ashare_data(code):
     recent_prices = df_hist.tail(120) # 约半年数据
     
     # 获取主要财务指标 (最新接口去掉了 _report)
-df_finance = ak.stock_financial_analysis_indicator_em(symbol=code)
+def get_ashare_data(code):
+    # 1. 获取实时行情 (这个接口最稳)
+    df_spot = ak.stock_zh_a_spot_em()
+    spot = df_spot[df_spot['代码'] == code].iloc[0]
+    
+    # 2. 获取历史日线
+    hist = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq")
+    recent_prices = hist.tail(120) 
+    
+    # 3. 获取财务指标 (增加异常处理)
+    try:
+        df_finance = ak.stock_financial_analysis_indicator_em(symbol=code)
+        latest_finance = df_finance.iloc[0]
+    except Exception:
+        # 如果财务数据抓不到，就给一个空的字典，防止报错
+        latest_finance = {"净资产收益率(%)": "暂无", "净利润同比增长率(%)": "暂无"}
+    
+    return spot, recent_prices, latest_finance
     latest_finance = df_finance.iloc[0] # 最新一季财报
     
     return current_info, recent_prices, latest_finance
@@ -94,3 +111,4 @@ if analyze_btn:
         except Exception as e:
 
             st.error(f"分析出错：可能是代码输入有误或API限流。错误信息：{e}")
+
