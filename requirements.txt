@@ -2,4 +2,3 @@ streamlit
 akshare
 openai
 pandas
-streamlit-authenticator==0.3.4
