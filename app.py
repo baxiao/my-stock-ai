@@ -9,7 +9,8 @@ st.title("🇨🇳 A股全维度 AI 智能分析系统")
 
 # --- 1. 配置 DeepSeek API ---
 # 请在此处填入你的 API Key
-DEEPSEEK_API_KEY = "sk-3b8d5f4b80ef4e1c9b740b99aff0853d"
+# 告诉程序从 Streamlit 的 secrets（私密配置）中读取
+DEEPSEEK_API_KEY = st.secrets["deepseek_api_key"]
 client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
 
 # --- 2. 侧边栏设置 ---
@@ -111,4 +112,5 @@ if analyze_btn:
         except Exception as e:
 
             st.error(f"分析出错：可能是代码输入有误或API限流。错误信息：{e}")
+
 
