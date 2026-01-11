@@ -3,130 +3,134 @@ import akshare as ak
 import pandas as pd
 from openai import OpenAI
 import time
-from datetime import datetime, timedelta
 
-# --- 1. 页面基础配置 ---
+# --- 1. 页面配置 ---
 st.set_page_config(page_title="文哥哥AI金融终端", page_icon="📈", layout="wide")
 
 st.markdown("""
     <style>
-    .stMetric { background-color: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #eee; }
-    .report-box { background-color: #f9f9f9; padding: 20px; border-radius: 12px; border-left: 5px solid #ff4b4b; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .report-box { background-color: #ffffff; padding: 25px; border-radius: 15px; border: 1px solid #e0e0e0; border-left: 5px solid #ff4b4b; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 安全门禁系统 ---
+# --- 2. 安全门禁系统 (从 Secrets 读取) ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
 if not st.session_state['logged_in']:
     st.title("🛡️ 私人金融终端 - 身份验证")
     if "access_password" in st.secrets:
-        if st.button("进入系统") or st.text_input("授权码", type="password") == st.secrets["access_password"]:
-            # 简化逻辑，实际使用请用之前的完整密码校验代码
-            st.session_state['logged_in'] = True
-            st.rerun()
+        pwd_input = st.text_input("请输入访问授权码：", type="password")
+        if st.button("验证并进入"):
+            if pwd_input == st.secrets["access_password"]:
+                st.session_state['logged_in'] = True
+                st.rerun()
+            else:
+                st.error("授权码错误")
+    else:
+        st.warning("⚠️ 请先在 Secrets 中设置 access_password")
     st.stop()
 
 # --- 3. 核心 API 配置 ---
 client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
 
-# --- 4. 核心计算函数：多周期分析 ---
-def calculate_period_performance(df):
-    """根据历史K线计算不同周期的涨跌幅"""
-    if df.empty: return {}
-    latest_price = df.iloc[-1]['收盘']
-    
-    periods = {
-        "近一周": 5,
-        "近一月": 20,
-        "近三月": 60,
-        "近半年": 120,
-        "近一年": 250
-    }
-    
-    results = {}
-    for label, days in periods.items():
-        if len(df) >= days:
-            start_price = df.iloc[-days]['收盘']
-            change = ((latest_price - start_price) / start_price) * 100
-            results[label] = f"{change:.2f}%"
-        else:
-            results[label] = "数据不足"
-    return results
+# --- 4. 辅助函数 ---
+def get_market(code):
+    return "sh" if code.startswith(('6', '9', '688')) else "sz"
 
 # --- 5. 主界面布局 ---
-st.title("🛡️ 文哥哥 A股多周期 AI 决策系统")
+st.title("🛡️ 文哥哥 A股主力雷达 & AI 深度分析")
 
 with st.sidebar:
-    stock_code = st.text_input("📍 股票代码", value="600519")
+    st.header("🔍 分析配置")
+    stock_code = st.text_input("股票代码", value="600519")
+    
+    # --- 新增：时间线选择 ---
+    time_span = st.select_slider(
+        "选择分析时间线：",
+        options=["近一周", "近一月", "近三月", "近半年", "近一年"],
+        value="近三月"
+    )
+    
+    # 映射时间跨度对应的交易天数
+    span_map = {"近一周": 5, "近一月": 20, "近三月": 60, "近半年": 120, "近一年": 250}
+    lookback_days = span_map[time_span]
+    
     st.divider()
-    if st.button("🔴 安全退出"):
+    if st.button("🔴 安全退出系统"):
         st.session_state['logged_in'] = False
         st.rerun()
 
-tab1, tab2 = st.tabs(["📊 多周期趋势看板", "🧠 全周期 AI 投研报告"])
-
-# --- 功能一：多周期行情展示 ---
-with tab1:
-    if st.button("📡 同步多周期行情"):
-        try:
-            with st.spinner('正在计算多周期波动数据...'):
-                # 获取一年半的数据以确保计算准确
-                hist = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq").tail(400)
-                stats = calculate_period_performance(hist)
-                
-                st.subheader(f"📈 周期波动率对比 ({stock_code})")
-                cols = st.columns(5)
-                for i, (label, val) in enumerate(stats.items()):
-                    # 判断涨跌颜色
-                    color = "normal" if "-" not in val else "inverse"
-                    cols[i].metric(label, val, delta_color=color)
-                
-                st.divider()
-                st.write("**走势可视化 (近一年)**")
-                st.line_chart(hist.tail(250).set_index('日期')['收盘'])
-        except Exception as e:
-            st.error(f"数据获取失败: {e}")
-
-# --- 功能二：全周期 AI 决策 ---
-with tab2:
-    if st.button("🚀 生成全周期深度决策"):
-        progress_bar = st.progress(0)
-        try:
-            # 准备数据发给 AI
-            hist_full = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq").tail(250)
-            stats_info = calculate_period_performance(hist_full)
-            
-            prompt_ai = f"""
-            你是一名高级策略分析师。请分析股票代码 {stock_code} 的多周期表现：
-            
-            【波动数据】
-            - 近一周：{stats_info.get('近一周')}
-            - 最近一个月：{stats_info.get('近一月')}
-            - 最近三个月：{stats_info.get('近三月')}
-            - 最近半年：{stats_info.get('近半年')}
-            - 最近一年：{stats_info.get('近一年')}
-
-            【要求】请分模块深度分析：
-            1. 【周期趋势判读】：判断该股目前是处于“短强长弱”还是“长趋势走牛”？
-            2. 【买卖时机】：结合周期波动，给出目前是“回踩买入”还是“冲高出货”的建议。
-            3. 【持仓建议】：分别给出短线（一周）、中线（三月）、长线（一年）的预期回报和风险等级。
-            4. 【目标价】：预测未来一个月的短线目标价及一年的长线目标价。
-            """
-            
-            progress_bar.progress(50)
-            response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt_ai}])
-            progress_bar.progress(100)
-            
-            st.subheader(f"📋 {stock_code} 全周期投研决策建议")
-            st.markdown(f'<div class="report-box">{response.choices[0].message.content}</div>', unsafe_allow_html=True)
-            
-        except Exception as e:
-            st.error(f"AI 决策引擎繁忙: {e}")
-        finally:
-            time.sleep(1)
-            progress_bar.empty()
+# --- 6. 执行逻辑 ---
+if st.button("🚀 启动全维度交叉分析"):
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    try:
+        # A. 实时行情与主力资金 (保持原有功能)
+        status_text.text("📡 正在扫描主力资金雷达...")
+        df_spot = ak.stock_zh_a_spot_em()
+        spot = df_spot[df_spot['代码'] == stock_code].iloc[0]
+        
+        market = get_market(stock_code)
+        df_fund = ak.stock_individual_fund_flow(stock=stock_code, market=market)
+        latest_fund = df_fund.iloc[0]
+        progress_bar.progress(30)
+        
+        # B. 历史趋势获取 (根据选定的时间线)
+        status_text.text(f"📊 正在回溯{time_span}的市场表现...")
+        hist_data = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq").tail(lookback_days)
+        progress_bar.progress(60)
+        
+        # C. 顶部数据看板
+        st.subheader(f"💎 {spot['名称']} ({stock_code}) 核心情报")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("最新价", f"¥{spot['最新价']}", f"{spot['涨跌幅']}%")
+        c2.metric("主力净流入", f"{latest_fund['主力净流入-净额']}")
+        c3.metric("主力净占比", f"{latest_fund['主力净流入-净占比']}%")
+        c4.metric("分析时段", time_span)
+        
+        # D. 趋势展示
+        st.write(f"**{time_span}走势可视化**")
+        st.line_chart(hist_data.set_index('日期')['收盘'])
+        
+        # E. AI 深度决策 (融合主力数据 + 时间线)
+        status_text.text("🤖 DeepSeek 正在进行多维度决策分析...")
+        
+        prompt = f"""
+        你是一名资深A股首席分析师。请针对股票 {spot['名称']} ({stock_code}) 进行深度研报编写。
+        
+        【当前主力状态】
+        - 实时主力净流入：{latest_fund['主力净流入-净额']}
+        - 资金净占比：{latest_fund['主力净流入-净占比']}%
+        
+        【分析时间线：{time_span}】
+        - 该周期内最高价：{hist_data['最高'].max()}
+        - 该周期内最低价：{hist_data['最低'].min()}
+        - 周期内波动幅度：{((hist_data['收盘'].iloc[-1] - hist_data['收盘'].iloc[0]) / hist_data['收盘'].iloc[0] * 100):.2f}%
+        
+        【要求】
+        1. 【主力行为定性】：结合今日主力资金和{time_span}的趋势，判断主力是在持续吸筹、阶段性派发还是散户博弈？
+        2. 【周期性买卖建议】：针对{time_span}的走势，给出明确的【买入/出手/观望】建议。
+        3. 【目标价位】：给出接下来一个周期内的支撑位、压力位及预期目标价。
+        4. 【风险评估】：评估目前位置的追高风险或筑底可靠性。
+        """
+        
+        response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
+        progress_bar.progress(100)
+        status_text.text("✅ 分析完成")
+        
+        st.divider()
+        st.subheader(f"📋 AI 深度投研报告 ({time_span}维度)")
+        st.markdown(f'<div class="report-box">{response.choices[0].message.content}</div>', unsafe_allow_html=True)
+        
+    except Exception as e:
+        st.error(f"分析失败，请检查代码或重试: {e}")
+    finally:
+        time.sleep(2)
+        progress_bar.empty()
+        status_text.empty()
 
 st.divider()
-st.caption("风险提示：AI分析仅供参考。")
+st.caption("风险提示：AI分析不构成投资建议，股市有风险，入市需谨慎。")
