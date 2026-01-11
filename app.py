@@ -135,7 +135,7 @@ with tab2:
             
             with main_placeholder.container():
                 c_time, c_status = st.columns([1, 1])
-                c_time.caption(f"🕒 中国标准时间: {bj_time} | 步频: 1s")
+                c_time.caption(f"🕒 最后更新时间: {bj_time} | 步频: 1s")
                 c_status.markdown("🟢 **终端监控已就绪**" if st.session_state.auto_refresh else "🟡 **手动待机模式**")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("📌 当前价位", f"¥{data['price']}", f"{data['pct']}%")
