@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 import pytz
 
-# --- 1. 页面基本配置 ---
+# --- 1. 页面配置 ---
 st.set_page_config(page_title="文哥哥极速终端", page_icon="🚀", layout="wide")
 
 # --- 2. 初始化持久化状态 ---
@@ -15,18 +15,15 @@ if 'last_data' not in st.session_state: st.session_state.last_data = None
 if 'last_code' not in st.session_state: st.session_state.last_code = ""
 if 'auto_refresh' not in st.session_state: st.session_state.auto_refresh = False
 
-# 强制北京时间
 CN_TZ = pytz.timezone('Asia/Shanghai')
 
 # --- 3. 核心数据引擎 (带断流保护) ---
 @st.cache_data(ttl=2)
 def get_stock_all_data(code):
     try:
-        # A. 基础行情
         df_hist = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq").tail(30)
         if df_hist.empty: return {"success": False, "msg": "未找到代码"}
         
-        # B. 资金流向
         fund = None
         try:
             mkt = "sh" if code.startswith(('6', '9', '688')) else "sz"
@@ -71,7 +68,6 @@ if 'logged_in' not in st.session_state:
 
 if not st.session_state['logged_in']:
     st.title("🔐 私人终端授权访问")
-    # 类似 API Key 方式读取密码
     pwd = st.text_input("请输入访问密钥", type="password")
     if st.button("开启终端", use_container_width=True):
         if "access_password" in st.secrets and pwd == st.secrets["access_password"]:
@@ -81,7 +77,6 @@ if not st.session_state['logged_in']:
             st.error("密钥无效")
     st.stop()
 
-# OpenAI 客户端配置
 client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
 
 # --- 6. 侧边栏 ---
@@ -104,47 +99,35 @@ with st.sidebar:
 st.title(f"📈 文哥哥 AI 终端: {code}")
 tab1, tab2, tab3 = st.tabs(["🧠 AI 深度决策", "🎯 实时资金雷达", "📜 文哥哥·私募心法"])
 
-# --- Tab 1: AI 决策 (增加进度条) ---
+# --- Tab 1: AI 决策 (进度条版) ---
 with tab1:
     if st.button("🚀 启动全维度 AI 建模", use_container_width=True):
-        progress_text = "正在调取深度量化算力，请稍候..."
+        progress_text = "正在调取深度量化算力分析中..."
         my_bar = st.progress(0, text=progress_text)
-        
-        # 模拟加载进度
-        for percent_complete in range(1, 101, 5):
+        for percent in range(0, 101, 5):
             time.sleep(0.05)
-            my_bar.progress(percent_complete, text=progress_text)
+            my_bar.progress(percent, text=progress_text)
         
         data = get_stock_all_data(code)
         if data["success"]:
             lamps = calculate_four_lamps(data)
             lamp_str = f"趋势:{lamps['trend']}, 资金:{lamps['money']}, 情绪:{lamps['sentiment']}, 安全:{lamps['safety']}"
-            prompt = f"分析股票 {code}。价格:{data['price']}, 四灯状态:{lamp_str}。请按5部分(决策、预测、空间、总结)给出专业分析。"
-            
-            try:
-                response = client.chat.completions.create(
-                    model="deepseek-chat",
-                    messages=[{"role": "system", "content": "你是一个资深私募量化分析师，遵循红涨绿跌。"}, {"role": "user", "content": prompt}]
-                )
-                st.session_state.ai_cache = {"content": response.choices[0].message.content}
-                my_bar.empty() # 完成后清除进度条
-                st.success("深度分析已生成")
-            except Exception as e:
-                st.error(f"AI 引擎响应超时，请稍后重试。")
-    
+            prompt = f"分析股票 {code}。价格:{data['price']}, 四灯状态:{lamp_str}。请按决策、预测、空间、总结分析。"
+            response = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[{"role": "system", "content": "你资深私募量化师。"}, {"role": "user", "content": prompt}]
+            )
+            st.session_state.ai_cache = {"content": response.choices[0].message.content}
+            my_bar.empty()
     if st.session_state.ai_cache:
         st.markdown(st.session_state.ai_cache['content'])
 
-# --- Tab 2: 实时资金雷达 (无闪无清空版) ---
+# --- Tab 2: 实时资金雷达 (两行明细+万元版) ---
 with tab2:
-    # 定义原地刷新的占位容器
     monitor_placeholder = st.empty()
     
     def render_dashboard():
-        # 获取新数据
         res = get_stock_all_data(code)
-        
-        # 断流保护逻辑
         if not res["success"] and st.session_state.last_data:
             data = st.session_state.last_data
             status_tag = "⚠️ 延迟数据"
@@ -153,18 +136,17 @@ with tab2:
             st.session_state.last_data = res
             status_tag = "🟢 实时连通"
         else:
-            monitor_placeholder.warning("正在连接数据卫星，请稍候...")
+            monitor_placeholder.warning("正在连接卫星数据源...")
             return
 
         f = data['fund']
         lamps = calculate_four_lamps(data)
         bj_time = datetime.now(CN_TZ).strftime('%H:%M:%S')
         
-        # 使用 container 在占位符内静默更新
         with monitor_placeholder.container():
-            st.caption(f"🕒 中国标准时间: {bj_time} | {status_tag} | 🔴正面 🟢风险")
+            st.caption(f"🕒 北京时间: {bj_time} | {status_tag} | 🔴正面 🟢风险")
             
-            # --- 卡片指示灯美化 ---
+            # 四灯显示
             st.write("### 🚦 核心策略哨兵")
             l1, l2, l3, l4 = st.columns(4)
             def draw_lamp(col, title, status, desc_red, desc_green):
@@ -186,28 +168,33 @@ with tab2:
             st.write("---")
             m1, m2 = st.columns(2)
             m1.metric("📌 当前价位", f"¥{data['price']}", f"{data['pct']}%")
-            fund_line = float(f['主力净流入-净额']) if f is not None else 0
-            m2.metric("🌊 核心资金流", f"¥{fund_line:.2f}", "多方发力" if fund_line > 0 else "空方占优")
+            # 资金流转万元
+            f_total = float(f['主力净流入-净额']) / 10000 if f is not None else 0
+            m2.metric("🌊 主力净额", f"{f_total:.2f} 万", "多方入场" if f_total > 0 else "空方减速")
             
             st.write("---")
-            st.write("📊 **6大资金板块明细**")
+            st.write("📊 **6大资金板块明细 (万元)**")
             if f is not None:
-                c1, c2, c3, c4, c5, c6 = st.columns(6)
-                c1.metric("机构", f['超大单净流入-净额'])
-                c2.metric("游资", f['大单净流入-净额'])
-                c3.metric("大户", f['中单净流入-净额'])
-                c4.metric("量化", "监测中")
-                c5.metric("产业", f['主力净流入-净额'])
-                c6.metric("散户", f['小单净流入-净额'])
+                # 分成两行
+                r1_c1, r1_c2, r1_c3 = st.columns(3)
+                r2_c1, r2_c2, r2_c3 = st.columns(3)
+                
+                # 第一行
+                r1_c1.metric("🏢 机构投资者", f"{float(f['超大单净流入-净额'])/10000:.1f} 万")
+                r1_c2.metric("🔥 游资动向", f"{float(f['大单净流入-净额'])/10000:.1f} 万")
+                r1_c3.metric("🐂 大户牛散", f"{float(f['中单净流入-净额'])/10000:.1f} 万")
+                
+                # 第二行
+                r2_c1.metric("🤖 量化资金", "实时监控中")
+                r2_c2.metric("🏭 产业资金", f"{float(f['主力净流入-净额'])/10000:.1f} 万")
+                r2_c3.metric("🐣 散户群体", f"{float(f['小单净流入-净占比']):.1f} %")
             
             st.line_chart(data['df'].set_index('日期')['收盘'], height=200)
 
-    # 循环逻辑：核心在于不使用 st.rerun()，而是通过 time.sleep 循环重绘 placeholder
     if st.session_state.auto_refresh:
         while st.session_state.auto_refresh:
             render_dashboard()
             time.sleep(1)
-            # 注意：此处千万不要加 st.rerun()，否则会导致页面闪烁清空
     else:
         render_dashboard()
         if st.button("🔄 手动同步最新数据"): render_dashboard()
@@ -220,24 +207,12 @@ with tab3:
     st.write("---")
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("""
-        #### **1. 📈 趋势灯 (Trend)**
-        - **🔴 红灯 (走强)**：MA5站在MA20之上，处于上升通道。
-        - **🟢 绿灯 (警惕)**：价格跌穿生命线，建议防守。
-        #### **2. 💰 资金灯 (Money)**
-        - **🔴 红灯 (吸筹)**：主力大单呈现净流入，资金入场。
-        - **🟢 绿灯 (流出)**：主力大单持续抛售，筹码外流。
-        """)
+        st.markdown("#### **1. 📈 趋势灯**\n- **🔴 红色**：多头，持股。\n- **🟢 绿色**：走弱，防守。")
+        st.markdown("#### **2. 💰 资金灯**\n- **🔴 红色**：主力入场。\n- **🟢 绿色**：主力撤离。")
     with col2:
-        st.markdown("""
-        #### **3. 🎭 情绪灯 (Sentiment)**
-        - **🔴 红灯 (高昂)**：买盘积极，人气汇聚。
-        - **🟢 绿灯 (低迷)**：信心匮乏，卖压沉重。
-        #### **4. 🛡️ 安全灯 (Safety)**
-        - **🔴 红灯 (安全)**：散户占比极低，筹码已被机构锁定。
-        - **🟢 危险 (警惕)**：散户大幅涌入，筹码松动，易跌难涨。
-        """)
+        st.markdown("#### **3. 🎭 情绪灯**\n- **🔴 红色**：买盘积极。\n- **🟢 绿色**：卖压沉重。")
+        st.markdown("#### **4. 🛡️ 安全灯**\n- **🔴 红色**：筹码锁定。\n- **🟢 绿色**：散户涌入。")
     st.success("🛡️ **文哥哥提醒：只做红灯共振的机会，坚决远离绿灯密集的区域。**")
 
 st.divider()
-st.caption(f"文哥哥专用 | 无闪烁丝滑刷新版 | 北京时间: {datetime.now(CN_TZ).strftime('%Y-%m-%d')}")
+st.caption(f"文哥哥专用 | 2026.01.12 | 万元版")
