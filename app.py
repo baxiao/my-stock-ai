@@ -2,104 +2,112 @@ import streamlit as st
 import akshare as ak
 import pandas as pd
 from openai import OpenAI
-import time
 
 # --- 1. 基础页面设置 ---
-st.set_page_config(page_title="文哥哥AI分析师", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="文哥哥AI分析师", layout="wide")
 
-# --- 2. 核心：DeepSeek API 安全接入 ---
+# --- 2. DeepSeek API 配置 ---
 if "deepseek_api_key" in st.secrets:
     client = OpenAI(
         api_key=st.secrets["deepseek_api_key"], 
         base_url="https://api.deepseek.com"
     )
 else:
-    st.error("❌ 请在 Streamlit 后台 Secrets 配置 deepseek_api_key")
+    st.error("❌ 请在 Secrets 中配置 deepseek_api_key")
     st.stop()
 
-# --- 3. 辅助函数：判断沪深市场 ---
+# --- 3. 辅助函数 ---
 def get_market(code):
-    if code.startswith(('6', '9', '688')):
-        return "sh"
-    else:
-        return "sz"
+    return "sh" if code.startswith(('6', '9', '688')) else "sz"
 
-# --- 4. 主界面设计 ---
-st.title("📈 A股主力监控 + AI 智能决策系统")
-st.markdown("---")
+def get_base_data(code):
+    """获取基础行情数据"""
+    df_spot = ak.stock_zh_a_spot_em()
+    spot = df_spot[df_spot['代码'] == code].iloc[0]
+    return spot
 
+# --- 4. 侧边栏：功能切换 ---
 with st.sidebar:
-    st.header("🔍 股票查询")
-    stock_code = st.text_input("代码 (如: 600519)", value="600519", max_chars=6)
-    analyze_btn = st.button("🚀 开启全维度深度分析")
+    st.header("功能菜单")
+    mode = st.radio(
+        "选择操作模式：",
+        ("主力进场/退场监控", "个股深度AI分析")
+    )
     st.divider()
-    st.caption("提示：包含实时行情、主力资金、AI 买卖建议")
+    stock_code = st.text_input("请输入股票代码 (如 600519)", "600519")
+    run_btn = st.button("🚀 执行查询")
+    st.divider()
+    if mode == "主力进场/退场监控":
+        st.caption("🔍 模式说明：专门监控大单资金流向，判断主力是否在场。")
+    else:
+        st.caption("🤖 模式说明：全维度基本面+技术面分析，并给出买卖建议。")
 
-# --- 5. 核心逻辑执行 ---
-if analyze_btn:
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    try:
-        # 第一阶段：抓取实时与历史行情
-        status_text.text("正在同步实时交易数据...")
-        df_spot = ak.stock_zh_a_spot_em()
-        spot = df_spot[df_spot['代码'] == stock_code].iloc[0]
-        
-        hist = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq").tail(60)
-        progress_bar.progress(30)
-        
-        # 第二阶段：监控主力资金 (关键修改点)
-        status_text.text("正在扫描主力筹码动向...")
-        market = get_market(stock_code)
+# --- 5. 功能逻辑实现 ---
+
+# --- 功能 A：主力进场/退场监控 ---
+if run_btn and mode == "主力进场/退场监控":
+    with st.spinner('正在扫描主力筹码...'):
         try:
-            # 抓取个股资金流向
+            spot = get_base_data(stock_code)
+            market = get_market(stock_code)
+            # 获取个股资金流向
             df_fund = ak.stock_individual_fund_flow(stock=stock_code, market=market)
-            latest_fund = df_fund.iloc[0]
-            main_inflow = latest_fund['主力净流入-净额']
-            main_pct = latest_fund['主力净流入-净占比']
-        except:
-            main_inflow = "数据维护中"
-            main_pct = "N/A"
-        progress_bar.progress(60)
+            latest = df_fund.iloc[0] # 获取最新一天
+            
+            st.subheader(f"📊 主力动向监控：{spot['名称']} ({stock_code})")
+            
+            c1, c2, c3 = st.columns(3)
+            # 根据流入流出显示颜色
+            main_inflow = latest['主力净流入-净额']
+            color = "normal" if "-" not in str(main_inflow) else "inverse"
+            
+            c1.metric("主力净流入(元)", f"{main_inflow}", delta=None)
+            c2.metric("超大单流入(元)", f"{latest['超大单净流入-净额']}")
+            c3.metric("主力净占比", f"{latest['主力净流入-净占比']}%")
 
-        # 第三阶段：展示仪表盘
-        st.subheader(f"💎 {spot['名称']} ({stock_code}) 核心情报")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("最新价", f"¥{spot['最新价']}", f"{spot['涨跌幅']}%")
-        c2.metric("主力净买入", f"{main_inflow}")
-        c3.metric("主力占比", f"{main_pct}%")
-        c4.metric("换手率", f"{spot['换手率']}%")
-        
-        st.line_chart(hist.set_index('日期')['收盘'])
-        
-        # 第四阶段：AI 决策
-        status_text.text("🤖 DeepSeek 正根据主力动向制定投资决策...")
-        
-        prompt = f"""
-        你是一名A股顶级操盘手。请针对 {spot['名称']} ({stock_code}) 给出实战分析：
-        - 现价：{spot['最新价']} ({spot['涨跌幅']}%)
-        - 主力资金状态：净流入 {main_inflow}，占比 {main_pct}%
-        - 市场数据：市盈率 {spot['市盈率-动态']}，换手率 {spot['换手率']}%
-        
-        请严格按以下要求输出：
-        1. 【主力是否存在】：根据资金占比判断主力是在吸筹、派发还是观望。
-        2. 【买卖动作建议】：必须从【强烈买入、分批买入、持股观望、逢高减持、一键清仓】中选一个。
-        3. 【目标价格】：给出未来一个月的短线压力位和长线目标位。
-        4. 【风险警示】：给出当前最核心的一个风险点。
-        """
+            # 调用 AI 快速定性
+            prompt = f"""
+            分析股票 {spot['名称']} 今日资金数据：
+            主力净流入：{main_inflow}元，占比：{latest['主力净流入-净占比']}%。
+            请简短判断：1.主力是在进场还是退场？2.属于吸筹、出货还是洗盘？3.散户跟风情况。
+            """
+            response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
+            
+            st.info(f"🤖 **AI 资金定性判读：**\n\n{response.choices[0].message.content}")
+            
+        except Exception as e:
+            st.error(f"数据抓取失败，可能由于非交易日或代码错误：{e}")
 
-        response = client.chat.completions.create(
-            model="deepseek-chat", 
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        progress_bar.progress(100)
-        status_text.text("✅ 分析完成")
-        
-        st.divider()
-        st.subheader("🤖 DeepSeek AI 投资决策建议")
-        st.info(response.choices[0].message.content)
+# --- 功能 B：个股深度AI分析 ---
+if run_btn and mode == "个股深度AI分析":
+    with st.spinner('AI 正在全维度建模分析...'):
+        try:
+            spot = get_base_data(stock_code)
+            hist = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq").tail(60)
+            
+            st.subheader(f"🤖 深度决策报告：{spot['名称']} ({stock_code})")
+            
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                st.line_chart(hist.set_index('日期')['收盘'])
+            with col2:
+                st.write(f"**最新价:** ¥{spot['最新价']}")
+                st.write(f"**涨跌幅:** {spot['涨跌幅']}%")
+                st.write(f"**市盈率:** {spot['市盈率-动态']}")
+                st.write(f"**换手率:** {spot['换手率']}%")
 
-    except Exception as e:
-        st.error(f"分析出错：请确保代码正确且股市已开盘。详情：{e}")
+            # 调用 AI 进行深度分析
+            prompt = f"""
+            你是一名专业的A股分析师。针对 {spot['名称']} ({stock_code}) 给出深度报告：
+            1. 建议购入还是出手？（明确给出一个：强烈买入、观望、或出手）
+            2. 目标价格是多少？（给出未来1-3个月的预测）
+            3. 该股目前的支撑位和压力位在哪里？
+            """
+            response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
+            
+            st.divider()
+            st.markdown("### 📋 AI 实战策略建议")
+            st.success(response.choices[0].message.content)
+            
+        except Exception as e:
+            st.error(f"分析失败：{e}")
