@@ -98,7 +98,7 @@ with tab1:
                     inflow_val = str(data['fund']['主力净流入-净额'])
                     fund_direction = f"主力净流入 {inflow_val} (" + ("正在【入场】抢筹" if "-" not in inflow_val else "正在【离场】观望") + ")"
                 
-                news_text = "\n".join([f("- {n}") for n in data['news']])
+                news_text = "\n".join([f"- {n}" for n in data['news']])
                 
                 prompt = f"""
                 你是一名专业的资深股票分析师。请结合行情、资金、新闻分析股票 {code}。
@@ -131,10 +131,10 @@ with tab1:
         st.markdown(c['content'])
         st.code(c['content'])
 
-# --- Tab 2: 资金雷达 (主力+机构+游资) ---
+# --- Tab 2: 资金雷达 (全维度资金链) ---
 with tab2:
-    if st.button("📡 扫描实时资金动向", use_container_width=True):
-        with st.spinner("拦截多路筹码中..."):
+    if st.button("📡 扫描全维度资金动向", use_container_width=True):
+        with st.spinner("正在拦截各方筹码..."):
             data = get_stock_all_data(code)
             if data["success"]:
                 st.session_state.fund_cache = data
@@ -146,36 +146,36 @@ with tab2:
             
             # 1. 机构动向 (超大单)
             inst_inflow = str(f['超大单净流入-净额'])
-            inst_tag = "🏛️ 机构重仓扫货" if "-" not in inst_inflow else "🏥 机构抛售减仓"
+            inst_tag = "🏛️ 机构扫货" if "-" not in inst_inflow else "🏥 机构抛售"
             
             # 2. 主力动向 (超大+大单)
             main_inflow = str(f['主力净流入-净额'])
-            main_tag = "🔴 主力强势进场" if "-" not in main_inflow else "🟢 主力获利洗盘"
+            main_tag = "🔴 主力进场" if "-" not in main_inflow else "🟢 主力洗盘"
             
             # 3. 游资动向 (中单)
             hot_inflow = str(f['中单净流入-净额'])
-            hot_tag = "🔥 游资积极参与" if "-" not in hot_inflow else "🌬️ 游资离场观望"
+            hot_tag = "🔥 游资抢筹" if "-" not in hot_inflow else "🌬️ 游资离场"
+
+            # 4. 散户动向 (小单)
+            retail_inflow = str(f['小单净流入-净额'])
+            retail_tag = "🐣 散户入场" if "-" not in retail_inflow else "🍃 散户割肉"
             
-            # 三栏视觉展示
-            ca, cb, cc = st.columns(3)
-            with ca:
-                st.subheader(inst_tag)
-                st.write(f"机构净流入: **{inst_inflow}**")
-            with cb:
-                st.subheader(main_tag)
-                st.write(f"主力净流入: **{main_inflow}**")
-            with cc:
-                st.subheader(hot_tag)
-                st.write(f"游资净流入: **{hot_inflow}**")
+            # 四栏视觉展示
+            ca, cb, cc, cd = st.columns(4)
+            ca.metric(inst_tag, inst_inflow)
+            cb.metric(main_tag, main_inflow)
+            cc.metric(hot_tag, hot_inflow)
+            cd.metric(retail_tag, retail_inflow)
             
             st.divider()
             
-            # 底部 Metric 占比
-            c1, c2, c3, c4 = st.columns(4)
+            # 底部占比透视
+            c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("最新价", f"¥{d['price']}", f"{d['pct']}%")
             c2.metric("机构占比", f"{f['超大单净流入-净占比']}%")
             c3.metric("主力占比", f"{f['主力净流入-净占比']}%")
             c4.metric("游资占比", f"{f['中单净流入-净占比']}%")
+            c5.metric("散户占比", f"{f['小单净流入-净占比']}%")
             
             st.write("---")
             st.subheader("📰 相关支撑新闻")
@@ -186,7 +186,7 @@ with tab2:
         st.write("📈 **近期价格趋势**")
         st.line_chart(d['df'].set_index('日期')['收盘'])
     else:
-        st.info("💡 请点击按钮获取全维度资金占比分析")
+        st.info("💡 请点击按钮获取全维度资金链分析")
 
 st.divider()
-st.caption("文哥哥专用 | 机构+主力+游资三线监控 | 记忆化Tab版")
+st.caption("文哥哥专用 | 机构+主力+游资+散户 全面透视 | 记忆化Tab版")
