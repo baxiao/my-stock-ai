@@ -88,12 +88,18 @@ with tab1:
                 # 构造 Prompt，即使没资金数据也能分析趋势
                 fund_info = f"主力净流入:{data['fund']['主力净流入-净额']}" if data['fund'] is not None else "资金数据暂缺，请基于K线分析"
                 
-                prompt = f"""
-                股票代码:{code}, 现价:{data['price']}, 涨幅:{data['pct']}%。
-                {fund_info}。
-                请给结论:1.决策(买/卖/观望) 2.支撑压制位 3.核心逻辑。字数100以内。
-                """
+                prompt = f""当前时刻：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                股票：{spot_data['名称']} ({raw_code})
+                【绝对最新价】：{spot_data['最新价']} 元
+                今日涨跌幅：{spot_data['涨跌幅']}%
+                今日成交额：{spot_data['成交额']/1e8:.2f} 亿
                 
+                请结合以上【实时数据】及近期趋势，给出分析：
+                1.【建议决策】：明确给出【建议购入】、【建议出手】或【暂时观望】。
+                2.【目标预测】：未来3个月的目标价格区间。
+                3.【空间分析】：最新的核心支撑位和压力位。
+                4.【趋势总结】：简述当前强弱状态。
+                """                
                 try:
                     response = client.chat.completions.create(
                         model="deepseek-chat",
