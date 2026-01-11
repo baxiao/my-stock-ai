@@ -4,7 +4,7 @@ import pandas as pd
 from openai import OpenAI
 import time
 from datetime import datetime
-import pytz  # 引入时区库
+import pytz
 
 # --- 1. 页面配置 ---
 st.set_page_config(page_title="文哥哥极速终端", page_icon="🚀", layout="wide")
@@ -14,7 +14,6 @@ if 'ai_cache' not in st.session_state: st.session_state.ai_cache = None
 if 'last_code' not in st.session_state: st.session_state.last_code = ""
 if 'auto_refresh' not in st.session_state: st.session_state.auto_refresh = False
 
-# 定义中国时区
 CN_TZ = pytz.timezone('Asia/Shanghai')
 
 # --- 3. 核心取数逻辑 ---
@@ -41,18 +40,13 @@ def get_stock_all_data(code):
             pass 
             
         return {
-            "success": True,
-            "price": latest['收盘'],
-            "pct": latest['涨跌幅'],
-            "vol": latest['成交额'],
-            "news": news_list,
-            "fund": fund,
-            "df": df_hist
+            "success": True, "price": latest['收盘'], "pct": latest['涨跌幅'],
+            "vol": latest['成交额'], "news": news_list, "fund": fund, "df": df_hist
         }
     except Exception as e:
         return {"success": False, "msg": str(e)}
 
-# --- 4. 四灯算法逻辑核心 ---
+# --- 4. 四灯算法逻辑核心 (颜色调换：红色正面，绿色负面) ---
 def calculate_four_lamps(data):
     if not data or not data.get('success'):
         return {"trend": "⚪", "money": "⚪", "sentiment": "⚪", "safety": "⚪"}
@@ -60,14 +54,23 @@ def calculate_four_lamps(data):
     fund = data['fund']
     ma5 = df['收盘'].tail(5).mean()
     ma20 = df['收盘'].tail(20).mean()
-    trend_lamp = "🟢" if ma5 > ma20 else "🔴"
-    money_lamp = "🔴"
+    
+    # 1. 趋势灯: 走强为红
+    trend_lamp = "🔴" if ma5 > ma20 else "🟢"
+    
+    # 2. 资金灯: 买入为红
+    money_lamp = "🟢"
     if fund is not None:
-        if "-" not in str(fund['主力净流入-净额']): money_lamp = "🟢"
-    sentiment_lamp = "🟢" if data['pct'] > 0 else "🔴"
-    safety_lamp = "🔴"
+        if "-" not in str(fund['主力净流入-净额']): money_lamp = "🔴"
+            
+    # 3. 情绪灯: 上涨为红
+    sentiment_lamp = "🔴" if data['pct'] > 0 else "🟢"
+    
+    # 4. 安全灯: 筹码锁定(散户少)为红
+    safety_lamp = "🟢"
     if fund is not None:
-        if float(fund['小单净流入-净占比']) < 20: safety_lamp = "🟢"
+        if float(fund['小单净流入-净占比']) < 20: safety_lamp = "🔴"
+            
     return {"trend": trend_lamp, "money": money_lamp, "sentiment": sentiment_lamp, "safety": safety_lamp}
 
 # --- 5. 安全验证 ---
@@ -94,10 +97,8 @@ with st.sidebar:
     if code != st.session_state.last_code:
         st.session_state.ai_cache = None
         st.session_state.last_code = code
-    
     st.divider()
     st.session_state.auto_refresh = st.checkbox("🔄 开启实时静默刷新 (1s/次)", value=st.session_state.auto_refresh)
-    
     st.divider()
     if st.button("🔴 退出系统"):
         st.session_state['logged_in'] = False
@@ -114,13 +115,13 @@ with tab1:
         if data["success"]:
             lamps = calculate_four_lamps(data)
             lamp_str = f"趋势:{lamps['trend']}, 资金:{lamps['money']}, 情绪:{lamps['sentiment']}, 安全:{lamps['safety']}"
-            prompt = f"分析股票 {code}。价格:{data['price']}, 四灯:{lamp_str}。请按5部分分析。"
+            prompt = f"分析股票 {code}。价格:{data['price']}, 四灯:{lamp_str}。请结合红利绿空的中国特色给出决策分析。"
             response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
             st.session_state.ai_cache = {"content": response.choices[0].message.content}
     if st.session_state.ai_cache:
         st.markdown(st.session_state.ai_cache['content'])
 
-# --- Tab 2: 实时资金雷达 (时区同步版) ---
+# --- Tab 2: 实时资金雷达 ---
 with tab2:
     main_placeholder = st.empty()
     def draw_ui():
@@ -129,87 +130,76 @@ with tab2:
             f = data['fund']
             lamps = calculate_four_lamps(data)
             fund_line = float(f['主力净流入-净占比']) if f is not None else 0
-            
-            # 获取北京时间
             bj_time = datetime.now(CN_TZ).strftime('%H:%M:%S')
-            
             with main_placeholder.container():
-                c_time, c_status = st.columns([1, 1])
-                c_time.caption(f"🕒 最后更新时间: {bj_time} | 步频: 1s")
-                c_status.markdown("🟢 **终端监控已就绪**" if st.session_state.auto_refresh else "🟡 **手动待机模式**")
+                st.caption(f"🕒 最后更新时间: {bj_time} | 红灯代表正面，绿灯代表负面")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("📌 当前价位", f"¥{data['price']}", f"{data['pct']}%")
-                m2.metric("🌊 核心资金线", f"{fund_line}%", "活跃" if fund_line > 0 else "疲软")
+                m2.metric("🌊 核心资金线", f"{fund_line}%", "强力" if fund_line > 0 else "走弱")
                 m3.metric("🚦 综合灯效", f"{lamps['trend']}{lamps['money']}{lamps['sentiment']}{lamps['safety']}")
                 st.write("---")
                 l1, l2, l3, l4 = st.columns(4)
-                l1.info(f"趋势灯: {lamps['trend']}")
-                l2.info(f"资金灯: {lamps['money']}")
-                l3.info(f"情绪灯: {lamps['sentiment']}")
-                l4.info(f"安全灯: {lamps['safety']}")
+                l1.error(f"趋势: {lamps['trend']}") if lamps['trend']=="🔴" else l1.success(f"趋势: {lamps['trend']}")
+                l2.error(f"资金: {lamps['money']}") if lamps['money']=="🔴" else l2.success(f"资金: {lamps['money']}")
+                l3.error(f"情绪: {lamps['sentiment']}") if lamps['sentiment']=="🔴" else l3.success(f"情绪: {lamps['sentiment']}")
+                l4.error(f"安全: {lamps['safety']}") if lamps['safety']=="🔴" else l4.success(f"安全: {lamps['safety']}")
                 st.write("---")
-                st.write("📊 **6大资金板块动态**")
                 if f is not None:
                     c1, c2, c3 = st.columns(3); c4, c5, c6 = st.columns(3)
                     c1.metric("🏢 1.机构投资者", f['超大单净流入-净额'])
                     c2.metric("🔥 2.游资动向", f['大单净流入-净额'])
                     c3.metric("🐂 3.大户/牛散", f['中单净流入-净额'])
-                    c4.metric("🤖 4.量化资金", "🤖 扫描中")
+                    c4.metric("🤖 4.量化资金", "🤖 模拟中")
                     c5.metric("🏭 5.产业资金", f['主力净流入-净额'])
                     c6.metric("🐣 6.散户群体", f['小单净流入-净额'])
-                st.write("---")
                 st.line_chart(data['df'].set_index('日期')['收盘'], height=200)
-    
+
     if st.session_state.auto_refresh:
         while st.session_state.auto_refresh:
-            draw_ui()
-            time.sleep(1)
+            draw_ui(); time.sleep(1)
     else:
         draw_ui()
-        if st.button("🔄 同步最新实时数据", use_container_width=True):
-            draw_ui()
+        if st.button("🔄 同步实时数据"): draw_ui()
 
-# --- Tab 3: 文哥哥私人·四灯算法说明书 ---
+# --- Tab 3: 文哥哥·私募心法 (增强红灯说明 + 颜色反转) ---
 with tab3:
-    st.markdown("""
-    ## 📜 文哥哥私人·量化四灯算法心法
-    > **本系统通过“趋势、资金、情绪、筹码”四大维度构建实时博弈模型，旨在剥离市场噪音，直击资金底牌。**
-    """)
+    st.markdown("## 📜 文哥哥·私募心法 (四灯双向深度解析)")
+    st.info("注：本终端遵循 A 股逻辑：🔴 红色代表强度与机会，🟢 绿色代表走弱与风险。")
+    
     st.write("---")
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("""
-        ### 🕯️ 信号逻辑解析
         #### **1. 📈 趋势灯 (Trend)**
-        * **监控目标**: 价格运行重心。
-        * **🟢 绿灯**: 多头排列，处于上升趋势。
+        - **🔴 红灯 (走强)**：MA5站在MA20之上，多头发力，顺势而为。
+        - **🟢 绿灯 (警惕)**：价格跌破生命线，重心下移，谨防阴跌。
+        
         #### **2. 💰 资金灯 (Money)**
-        * **监控目标**: 真实真金白银动向。
-        * **🟢 绿灯**: 主力净买入，资金在加仓。
+        - **🔴 红灯 (吸筹)**：主力资金呈现净买入状态，真金白银在护盘。
+        - **🟢 绿灯 (派发)**：主力大单持续流出，筹码正向散户搬家。
         """)
     with col2:
         st.markdown("""
-        ### 🕯️ 信号逻辑解析 (续)
         #### **3. 🎭 情绪灯 (Sentiment)**
-        * **监控目标**: 市场人气与即时认可度。
-        * **🟢 绿灯**: 市场热度上行，买盘积极。
+        - **🔴 红灯 (高昂)**：日内涨幅为正，买气盖过卖气，人气聚集。
+        - **🟢 绿灯 (低迷)**：阴线回调，市场信心不足，观望情绪浓厚。
+        
         #### **4. 🛡️ 安全灯 (Safety)**
-        * **监控目标**: 筹码集中度与洗盘深度（反向指标）。
-        * **🟢 绿灯**: 散户占比 < 20%，筹码已被锁定。
+        - **🔴 红灯 (安全)**：散户占比极低，筹码高度集中在私募/机构手中。
+        - **🟢 绿灯 (风险)**：散户大幅涌入接盘，筹码松动，容易引发踩踏。
         """)
+
     st.write("---")
-    st.subheader("🎯 六大板块资金博弈模型")
+    st.subheader("💡 实战博弈总结")
     st.markdown("""
-    | 资金板块 | 角色定位 | 操作特性 |
+    | 信号组合 | 逻辑状态 | 操盘策略 |
     | :--- | :--- | :--- |
-    | **1. 机构投资者** | 定海神针 | 长线筹码，决定趋势高度。 |
-    | **2. 游资动向** | 进攻箭头 | 擅长打板，决定短线爆发力。 |
-    | **3. 大户/牛散** | 敏锐嗅觉 | 盘感极佳，通常在转折点出现。 |
-    | **4. 量化资金** | 绞肉机器 | 高频收割，造成盘中剧烈波动。 |
-    | **5. 产业资金** | 底牌玩家 | 决定公司价值底线。 |
-    | **6. 散户群体** | 反向指标 | 集体割肉时可布局。 |
+    | **四灯连红** | **全共振** | 核心主升浪，坚定持股，享受利润。 |
+    | **灯光闪绿** | **局部背离** | 警惕资金偷跑或趋势转折，观察能否修复。 |
+    | **多重绿灯** | **风险扩散** | 资金撤退且趋势破位，执行止损或减仓。 |
+    | **全绿监控** | **彻底冰点** | 弱势震荡或阴跌不止，管住手不抄底。 |
     """)
-    st.success("🛡️ **四灯全绿：【屠龙模式】。资金、趋势、筹码全共振。**")
+    st.success("🛡️ **文哥哥提醒：只做红灯共振，远离绿灯深渊。**")
 
 st.divider()
-st.caption(f"文哥哥专用 | 北京时间同步版 | 当前时区: {CN_TZ}")
+st.caption(f"文哥哥专用 | 私募心法增强版 | 北京时间: {datetime.now(CN_TZ).strftime('%Y-%m-%d %H:%M')}")
