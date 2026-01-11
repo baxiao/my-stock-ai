@@ -116,7 +116,7 @@ with tab1:
                 """
                 response = client.chat.completions.create(
                     model="deepseek-chat",
-                    messages=[{"role": "system", "content": "金融专家"}, {"role": "user", "content": prompt}],
+                    messages=[{"role": "system", "content": "股票分析专家"}, {"role": "user", "content": prompt}],
                     max_tokens=800, temperature=0.2 
                 )
                 st.session_state.ai_cache = {"content": response.choices[0].message.content, "price": data['price']}
