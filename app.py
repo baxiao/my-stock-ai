@@ -2,112 +2,154 @@ import streamlit as st
 import akshare as ak
 import pandas as pd
 from openai import OpenAI
+from fpdf import FPDF
+import time
 
-# --- 1. 基础页面设置 ---
-st.set_page_config(page_title="文哥哥AI分析师", layout="wide")
+# --- 1. 页面配置与美化 ---
+st.set_page_config(page_title="文哥哥AI金融终端", page_icon="📈", layout="wide")
 
-# --- 2. DeepSeek API 配置 ---
+st.markdown("""
+    <style>
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .report-box { background-color: #ffffff; padding: 25px; border-radius: 15px; border: 1px solid #e0e0e0; box-shadow: 2px 2px 10px rgba(0,0,0,0.05); }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. API 配置 ---
 if "deepseek_api_key" in st.secrets:
-    client = OpenAI(
-        api_key=st.secrets["deepseek_api_key"], 
-        base_url="https://api.deepseek.com"
-    )
+    client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
 else:
-    st.error("❌ 请在 Secrets 中配置 deepseek_api_key")
+    st.error("🔑 请在后台配置 API Key")
     st.stop()
 
-# --- 3. 辅助函数 ---
+# --- 3. PDF 导出逻辑 ---
+class ExportPDF(FPDF):
+    def header(self):
+        self.set_font('helvetica', 'B', 16)
+        self.cell(0, 10, 'Stock Intelligence Analysis Report', 0, 1, 'C')
+        self.ln(10)
+
+def generate_pdf_bytes(stock_name, stock_code, content):
+    pdf = ExportPDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", size=12)
+    pdf.cell(0, 10, f"Target: {stock_name} ({stock_code})", 0, 1)
+    pdf.cell(0, 10, f"Generated: {time.strftime('%Y-%m-%d %H:%M')}", 0, 1)
+    pdf.ln(5)
+    clean_text = content.replace('#', '').replace('*', '')
+    pdf.multi_cell(0, 10, txt=clean_text.encode('latin-1', 'replace').decode('latin-1'))
+    return pdf.output()
+
+# --- 4. 辅助函数 ---
 def get_market(code):
     return "sh" if code.startswith(('6', '9', '688')) else "sz"
 
-def get_base_data(code):
-    """获取基础行情数据"""
-    df_spot = ak.stock_zh_a_spot_em()
-    spot = df_spot[df_spot['代码'] == code].iloc[0]
-    return spot
+# --- 5. 主界面 ---
+st.title("🛡️ 文哥哥 A股 AI 智能情报站")
 
-# --- 4. 侧边栏：功能切换 ---
-with st.sidebar:
-    st.header("功能菜单")
-    mode = st.radio(
-        "选择操作模式：",
-        ("主力进场/退场监控", "个股深度AI分析")
-    )
-    st.divider()
-    stock_code = st.text_input("请输入股票代码 (如 600519)", "600519")
-    run_btn = st.button("🚀 执行查询")
-    st.divider()
-    if mode == "主力进场/退场监控":
-        st.caption("🔍 模式说明：专门监控大单资金流向，判断主力是否在场。")
-    else:
-        st.caption("🤖 模式说明：全维度基本面+技术面分析，并给出买卖建议。")
+with st.container():
+    col_input, _ = st.columns([1, 2])
+    with col_input:
+        stock_code = st.text_input("📍 输入股票代码", value="600519")
 
-# --- 5. 功能逻辑实现 ---
+tab1, tab2 = st.tabs(["🔥 主力监控", "🧠 AI 深度分析"])
 
-# --- 功能 A：主力进场/退场监控 ---
-if run_btn and mode == "主力进场/退场监控":
-    with st.spinner('正在扫描主力筹码...'):
+# --- 功能一：主力监控（带进度条） ---
+with tab1:
+    if st.button("开始监控资金流向"):
+        # 创建进度条和文字提示
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
         try:
-            spot = get_base_data(stock_code)
-            market = get_market(stock_code)
-            # 获取个股资金流向
-            df_fund = ak.stock_individual_fund_flow(stock=stock_code, market=market)
-            latest = df_fund.iloc[0] # 获取最新一天
+            status_text.text("📡 正在连接交易所，调取实时成交数据...")
+            time.sleep(0.5)
+            df_spot = ak.stock_zh_a_spot_em()
+            spot = df_spot[df_spot['代码'] == stock_code].iloc[0]
+            progress_bar.progress(40)
             
-            st.subheader(f"📊 主力动向监控：{spot['名称']} ({stock_code})")
+            status_text.text("🔍 正在扫描主力筹码分布与资金流向...")
+            time.sleep(0.5)
+            df_fund = ak.stock_individual_fund_flow(stock=stock_code, market=get_market(stock_code))
+            latest = df_fund.iloc[0]
+            progress_bar.progress(70)
             
-            c1, c2, c3 = st.columns(3)
-            # 根据流入流出显示颜色
-            main_inflow = latest['主力净流入-净额']
-            color = "normal" if "-" not in str(main_inflow) else "inverse"
+            status_text.text("🧠 正在通过 AI 进行资金意图判读...")
+            prompt = f"分析{spot['名称']}：主力流入{latest['主力净流入-净额']}元。主力进场还是退场？一句话总结。"
+            res = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
             
-            c1.metric("主力净流入(元)", f"{main_inflow}", delta=None)
-            c2.metric("超大单流入(元)", f"{latest['超大单净流入-净额']}")
-            c3.metric("主力净占比", f"{latest['主力净流入-净占比']}%")
-
-            # 调用 AI 快速定性
-            prompt = f"""
-            分析股票 {spot['名称']} 今日资金数据：
-            主力净流入：{main_inflow}元，占比：{latest['主力净流入-净占比']}%。
-            请简短判断：1.主力是在进场还是退场？2.属于吸筹、出货还是洗盘？3.散户跟风情况。
-            """
-            response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
+            progress_bar.progress(100)
+            status_text.text("✅ 数据获取成功！")
+            time.sleep(0.5)
+            status_text.empty()
+            progress_bar.empty()
             
-            st.info(f"🤖 **AI 资金定性判读：**\n\n{response.choices[0].message.content}")
+            # 展示结果
+            st.subheader(f"📊 {spot['名称']} 筹码分布状态")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("主力净流入", f"{latest['主力净流入-净额']}元")
+            m2.metric("主力占比", f"{latest['主力净流入-净占比']}%")
+            m3.metric("超大单流入", f"{latest['超大单净流入-净额']}元")
+            m4.metric("换手率", f"{spot['换手率']}%")
+            st.info(f"🤖 **主力意图：** {res.choices[0].message.content}")
             
         except Exception as e:
-            st.error(f"数据抓取失败，可能由于非交易日或代码错误：{e}")
+            st.error(f"数据获取失败：{e}")
+            status_text.empty()
+            progress_bar.empty()
 
-# --- 功能 B：个股深度AI分析 ---
-if run_btn and mode == "个股深度AI分析":
-    with st.spinner('AI 正在全维度建模分析...'):
+# --- 功能二：深度分析（带进度条） ---
+with tab2:
+    if st.button("生成深度决策报告"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
         try:
-            spot = get_base_data(stock_code)
-            hist = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq").tail(60)
+            status_text.text("📉 正在拉取近期 K 线走势数据...")
+            df_spot = ak.stock_zh_a_spot_em()
+            spot = df_spot[df_spot['代码'] == stock_code].iloc[0]
+            hist = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq").tail(100)
+            progress_bar.progress(30)
+            time.sleep(0.5)
             
-            st.subheader(f"🤖 深度决策报告：{spot['名称']} ({stock_code})")
+            status_text.text("🤖 DeepSeek 正在进行全维度建模与压力位计算...")
+            # 模拟 AI 思考的进度感
+            for i in range(31, 90, 10):
+                progress_bar.progress(i)
+                time.sleep(0.3)
             
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.line_chart(hist.set_index('日期')['收盘'])
-            with col2:
-                st.write(f"**最新价:** ¥{spot['最新价']}")
-                st.write(f"**涨跌幅:** {spot['涨跌幅']}%")
-                st.write(f"**市盈率:** {spot['市盈率-动态']}")
-                st.write(f"**换手率:** {spot['换手率']}%")
-
-            # 调用 AI 进行深度分析
-            prompt = f"""
-            你是一名专业的A股分析师。针对 {spot['名称']} ({stock_code}) 给出深度报告：
-            1. 建议购入还是出手？（明确给出一个：强烈买入、观望、或出手）
-            2. 目标价格是多少？（给出未来1-3个月的预测）
-            3. 该股目前的支撑位和压力位在哪里？
-            """
+            prompt = f"你是专业操盘手。分析{spot['名称']}。1.建议买入还是出手？2.目标价？3.支撑压力位？"
             response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
+            full_report = response.choices[0].message.content
             
+            progress_bar.progress(100)
+            status_text.text("✅ 报告生成完毕")
+            time.sleep(0.5)
+            status_text.empty()
+            progress_bar.empty()
+            
+            # 展示报告
+            st.subheader(f"📈 {spot['名称']} 走势与决策")
+            st.line_chart(hist.set_index('日期')['收盘'])
+            
+            st.markdown('<div class="report-box">', unsafe_allow_html=True)
+            st.markdown(full_report)
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # PDF 导出按钮
             st.divider()
-            st.markdown("### 📋 AI 实战策略建议")
-            st.success(response.choices[0].message.content)
-            
+            pdf_bytes = generate_pdf_bytes(spot['名称'], stock_code, full_report)
+            st.download_button(
+                label="📥 导出分析报告为 PDF",
+                data=pdf_bytes,
+                file_name=f"Report_{stock_code}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
         except Exception as e:
             st.error(f"分析失败：{e}")
+            status_text.empty()
+            progress_bar.empty()
+
+st.divider()
+st.caption("风险提示：AI建议仅供参考。")
