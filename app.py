@@ -4,85 +4,142 @@ import pandas as pd
 from openai import OpenAI
 import time
 
-# --- 1. 页面配置 ---
-st.set_page_config(page_title="文哥哥AI金融终端", page_icon="📈", layout="wide")
+# --- 1. 页面基础配置 ---
+st.set_page_config(
+    page_title="文哥哥AI金融终端", 
+    page_icon="📈", 
+    layout="wide"
+)
 
-# --- 2. API 配置 ---
+# 自定义美化样式
+st.markdown("""
+    <style>
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .report-box { background-color: #ffffff; padding: 25px; border-radius: 15px; border: 1px solid #e0e0e0; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. 安全门禁系统 (Session State) ---
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+
+# 身份验证逻辑
+if not st.session_state['logged_in']:
+    st.title("🛡️ 私人金融终端 - 身份验证")
+    
+    # 从 Secrets 中获取预设密码
+    if "access_password" in st.secrets:
+        correct_password = st.secrets["access_password"]
+        
+        col_login, _ = st.columns([1, 1])
+        with col_login:
+            pwd_input = st.text_input("请输入访问授权码：", type="password")
+            if st.button("验证并进入系统"):
+                if pwd_input == correct_password:
+                    st.session_state['logged_in'] = True
+                    st.success("验证成功！欢迎回来，文哥哥。")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("授权码错误，请重新输入。")
+    else:
+        st.warning("⚠️ 安全提醒：请先在 Streamlit 后台 Secrets 中设置 access_password")
+    
+    st.stop() # 未通过验证则停止执行后续代码
+
+# --- 3. 核心引擎加载 (验证通过后执行) ---
 if "deepseek_api_key" in st.secrets:
-    client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
+    client = OpenAI(
+        api_key=st.secrets["deepseek_api_key"], 
+        base_url="https://api.deepseek.com"
+    )
 else:
-    st.error("🔑 请在后台配置 API Key")
+    st.error("🔑 错误：未在 Secrets 中检测到 deepseek_api_key")
     st.stop()
 
-# --- 3. 极速数据抓取（带重试机制） ---
-def get_stock_data_reliable(code):
-    """
-    分步获取数据，确保第一步不崩
-    """
-    try:
-        # 尝试获取最简单的一行行情 (这个接口最不容易被封)
-        df = ak.stock_zh_a_spot_em()
-        # 筛选输入代码
-        target = df[df['代码'] == code]
-        
-        if target.empty:
-            return None, None, None, None
-            
-        spot = target.iloc[0]
-        name = spot['名称']
-        price = spot['最新价']
-        change = spot['涨跌幅']
-        
-        # 尝试抓取K线 (用于画图)，如果卡住就返回空
-        try:
-            hist = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq").tail(60)
-        except:
-            hist = pd.DataFrame()
-            
-        return name, price, change, hist
-    except Exception as e:
-        st.warning(f"正在尝试备用连接... {e}")
-        return None, None, None, None
-
-# --- 4. 主界面 ---
+# --- 4. 主界面布局 ---
 st.title("🛡️ 文哥哥 A股 AI 智能情报站")
 
-with st.container():
-    stock_code = st.text_input("📍 输入股票代码 (如 600519)", value="600519")
+# 侧边栏
+with st.sidebar:
+    st.header("系统状态")
+    st.success("✅ 授权访问中")
+    stock_code = st.text_input("📍 输入股票代码", value="600519", max_chars=6)
+    st.divider()
+    if st.button("🔴 安全退出系统"):
+        st.session_state['logged_in'] = False
+        st.rerun()
 
-tab1, tab2 = st.tabs(["🔥 实时行情", "🧠 AI 深度决策"])
+# 功能标签页
+tab1, tab2 = st.tabs(["🔥 资金行情监控", "🧠 AI 深度决策分析"])
 
+# --- 功能一：行情与主力监控 ---
 with tab1:
-    if st.button("查看行情"):
-        with st.status("📡 正在穿透网络连接交易所...", expanded=True) as status:
-            name, price, change, hist = get_stock_data_reliable(stock_code)
-            if name:
-                status.update(label="✅ 数据获取成功!", state="complete", expanded=False)
-                st.subheader(f"📊 {name} ({stock_code})")
-                c1, c2 = st.columns(2)
-                c1.metric("最新价", f"¥{price}", f"{change}%")
-                if not hist.empty:
-                    st.line_chart(hist.set_index('日期')['收盘'])
-            else:
-                status.update(label="❌ 连接被拦截", state="error")
-                st.error("国内交易所限制了海外访问，请多点几次按钮重试，或稍后再试。")
-
-with tab2:
-    if st.button("生成 AI 决策报告"):
+    if st.button("📡 开始扫描实时行情"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
         try:
-            with st.spinner('🤖 DeepSeek 正在极速建模...'):
-                # 如果第一步拿到了数据，直接传给AI；如果没拿到，让AI根据代码盲分析
-                prompt = f"分析A股代码 {stock_code} 的近期走势和投资建议。请给买入出手建议、目标价和支撑压力位。"
-                
-                response = client.chat.completions.create(
-                    model="deepseek-chat", 
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                
-                st.subheader(f"📋 代码 {stock_code} 投研决策书")
-                st.info(response.choices[0].message.content)
+            status_text.text("正在调取交易所行情...")
+            df_all = ak.stock_zh_a_spot_em()
+            target = df_all[df_all['代码'] == stock_code].iloc[0]
+            progress_bar.progress(100)
+            status_text.text("✅ 数据获取成功")
+            
+            st.subheader(f"📊 {target['名称']} ({stock_code}) 核心指标")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("最新价", f"¥{target['最新价']}", f"{target['涨跌幅']}%")
+            m2.metric("成交额", target['成交额'])
+            m3.metric("换手率", f"{target['换手率']}%")
+            m4.metric("市盈率(动)", target['市盈率-动态'])
+            
+            # AI 简评主力
+            prompt_fund = f"分析股票{target['名称']}：现价{target['最新价']}，换手率{target['换手率']}%。判断主力是在吸筹还是派发？用一句话总结。"
+            res_fund = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt_fund}])
+            st.info(f"🤖 **主力意图预判：** {res_fund.choices[0].message.content}")
+
         except Exception as e:
-            st.error("AI 接口拥挤，请稍后再试。")
+            st.error(f"行情数据获取超时，请稍后重试。")
+        finally:
+            time.sleep(1)
+            progress_bar.empty()
+            status_text.empty()
+
+# --- 功能二：AI 深度决策 ---
+with tab2:
+    if st.button("🚀 生成 AI 投研决策书"):
+        progress_bar = st.progress(0)
+        try:
+            st.write("正在连接 DeepSeek 智算中心进行多维度建模...")
+            # 模拟进度感
+            for i in range(1, 100, 20):
+                progress_bar.progress(i)
+                time.sleep(0.2)
+            
+            # 调用 AI 深度分析
+            prompt_ai = f"""
+            你是一名专业的A股首席分析师。请针对代码 {stock_code} 给出决策分析：
+            1. 主力目前是否在场？
+            2. 明确给出【建议购入】、【建议出手】或【暂时观望】。
+            3. 未来3个月的目标价格是多少？
+            4. 核心的支撑位和压力位在哪里？
+            """
+            
+            response = client.chat.completions.create(
+                model="deepseek-chat", 
+                messages=[{"role": "user", "content": prompt_ai}]
+            )
+            
+            progress_bar.progress(100)
+            st.divider()
+            st.subheader(f"📋 {stock_code} 深度决策报告")
+            st.markdown(f'<div class="report-box">{response.choices[0].message.content}</div>', unsafe_allow_html=True)
+            
+        except Exception as e:
+            st.error(f"AI 决策引擎繁忙: {e}")
+        finally:
+            time.sleep(1)
+            progress_bar.empty()
 
 st.divider()
-st.caption("风险提示：AI建议仅供参考。如果多次提示超时，说明云端服务器IP被交易所拦截。")
+st.caption("风险提示：本程序提供的所有信息仅供 AI 实验参考，不构成任何投资建议。")
