@@ -8,7 +8,7 @@ from datetime import datetime
 # --- 1. 页面配置 ---
 st.set_page_config(page_title="文哥哥极速终端", page_icon="🚀", layout="wide")
 
-# --- 2. 初始化持久化记忆 (切换TAB不消失) ---
+# --- 2. 初始化持久化记忆 ---
 if 'ai_cache' not in st.session_state: st.session_state.ai_cache = None
 if 'fund_cache' not in st.session_state: st.session_state.fund_cache = None
 if 'last_code' not in st.session_state: st.session_state.last_code = ""
@@ -29,7 +29,7 @@ def get_stock_all_data(code):
         except:
             news_list = ["新闻接口调用受限"]
 
-        # C. 资金流向与占比
+        # C. 资金流向
         fund = None
         try:
             mkt = "sh" if code.startswith(('6', '9', '688')) else "sz"
@@ -68,16 +68,14 @@ if not st.session_state['logged_in']:
 
 client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
 
-# --- 5. 侧边栏与代码更换逻辑 ---
+# --- 5. 侧边栏 ---
 with st.sidebar:
     st.title("🚀 控制中心")
     code = st.text_input("股票代码", value="600519").strip()
-    
     if code != st.session_state.last_code:
         st.session_state.ai_cache = None
         st.session_state.fund_cache = None
         st.session_state.last_code = code
-        
     st.divider()
     if st.button("🔴 退出系统"):
         st.session_state['logged_in'] = False
@@ -87,36 +85,34 @@ st.title(f"📈 文哥哥 AI 终端: {code}")
 
 tab1, tab2 = st.tabs(["🧠 AI 深度决策", "🎯 资金追踪雷达"])
 
-# --- Tab 1: AI 决策 (同步更新私募逻辑) ---
+# --- Tab 1: AI 决策 ---
 with tab1:
     if st.button("🚀 启动全维度 AI 建模", use_container_width=True):
-        with st.status("正在整合行情、私募资金、新闻面...", expanded=True) as status:
+        with st.status("正在进行6大资金板块逻辑建模...", expanded=True) as status:
             data = get_stock_all_data(code)
             if data["success"]:
-                # 资金方向判断 (主力逻辑转私募逻辑)
-                fund_direction = "数据暂缺"
-                if data['fund'] is not None:
-                    inflow_val = str(data['fund']['主力净流入-净额'])
-                    fund_direction = f"私募主力净流入 {inflow_val} (" + ("正在【入场】抢筹" if "-" not in inflow_val else "正在【离场】观望") + ")"
-                
-                news_text = "\n".join([f"- {n}" for n in data['news']])
+                f = data['fund']
+                # 构造 AI 需要的 6 板块背景
+                prompt_fund = f"""
+                1.机构投资者(超大): {f['超大单净流入-净额']}
+                2.游资(大单): {f['大单净流入-净额']}
+                3.大户/牛散(中单): {f['中单净流入-净额']}
+                4.散户群体(小单): {f['小单净流入-净额']}
+                5.量化/产业参考: 成交额{data['vol']/1e8:.2f}亿，涨跌幅{data['pct']}%
+                """
+                news_text = "\n".join(data['news'])
                 
                 prompt = f"""
-                你是一名专业的资深股票分析师。请结合行情、私募资金、新闻分析股票 {code}。
-                价格：{data['price']} 元，涨跌幅：{data['pct']}%
-                资金面：{fund_direction}
+                分析股票 {code}。价格:{data['price']}, 涨跌:{data['pct']}%。
+                资金分布：{prompt_fund}
                 最新新闻：{news_text}
-
-                ### 强制要求：
-                1. 标题必须独立成行，严禁合并。
-                2. 必须包含对【新闻面】的分析。
-
-                ### 必须输出的五个部分：
-                1.【建议决策】：明确给出【建议购入】、【建议出手】或【暂时观望】。
-                2.【短期预测】：未来一周的目标价格区间。
-                3.【中期预测】：未来3个月的目标价格区间。
-                4.【空间分析】：最新的核心支撑位和压力位。
-                5.【趋势总结】：结合新闻、私募动向和技术面。
+                
+                请严格按以下5部分分析（每标题一行）：
+                1.【建议决策】：建议购入/建议出手/建议观望
+                2.【短期预测】：未来一周目标价格区间
+                3.【中期预测】：未来3个月目标价格区间
+                4.【空间分析】：核心支撑位/压力位
+                5.【趋势总结】：必须结合 机构、游资、牛散、量化、产业、散户 六大维度的博弈结论。
                 """
                 response = client.chat.completions.create(
                     model="deepseek-chat",
@@ -124,18 +120,17 @@ with tab1:
                     max_tokens=800, temperature=0.2 
                 )
                 st.session_state.ai_cache = {"content": response.choices[0].message.content, "price": data['price']}
-                status.update(label="✅ AI 决策已就绪", state="complete")
+                status.update(label="✅ 分析已按6板块逻辑生成", state="complete")
 
     if st.session_state.ai_cache:
-        c = st.session_state.ai_cache
-        st.success(f"**分析基准价**: ¥{c['price']}")
-        st.markdown(c['content'])
-        st.code(c['content'])
+        st.success(f"**分析基准价**: ¥{st.session_state.ai_cache['price']}")
+        st.markdown(st.session_state.ai_cache['content'])
+        st.code(st.session_state.ai_cache['content'])
 
-# --- Tab 2: 资金雷达 (机构+私募+游资+散户) ---
+# --- Tab 2: 资金追踪雷达 (6大板块重定义) ---
 with tab2:
-    if st.button("📡 扫描全维度资金动向", use_container_width=True):
-        with st.spinner("正在拦截各方筹码..."):
+    if st.button("📡 扫描六大板块资金博弈", use_container_width=True):
+        with st.spinner("正在剥离解析 6 大板块数据..."):
             data = get_stock_all_data(code)
             if data["success"]:
                 st.session_state.fund_cache = data
@@ -145,43 +140,51 @@ with tab2:
         if d['fund'] is not None:
             f = d['fund']
             
-            # 1. 机构动向 (超大单)
-            inst_inflow = str(f['超大单净流入-净额'])
-            inst_tag = "🏛️ 机构扫货" if "-" not in inst_inflow else "🏥 机构抛售"
-            
-            # 2. 私募主力动向 (原主力逻辑)
-            pe_inflow = str(f['主力净流入-净额'])
-            pe_tag = "🍷 私募建仓" if "-" not in pe_inflow else "📉 私募撤离"
-            
-            # 3. 游资动向 (中单)
-            hot_inflow = str(f['中单净流入-净额'])
-            hot_tag = "🔥 游资抢筹" if "-" not in hot_inflow else "🌬️ 游资离场"
+            # --- 板块逻辑重定义 ---
+            # 1. 机构投资者
+            inst_val = str(f['超大单净流入-净额'])
+            # 2. 游资
+            hot_val = str(f['大单净流入-净额'])
+            # 3. 大户/牛散
+            big_val = str(f['中单净流入-净额'])
+            # 4. 量化资金 (模拟逻辑：高频波动与成交比)
+            vol_ratio = (abs(d['pct']) / (d['vol']/1e9)) if d['vol'] > 0 else 0
+            quant_tag = "🤖 量化算法活跃" if vol_ratio > 1.5 else "📉 量化参与度低"
+            # 5. 产业资金 (关联逻辑：主力占比与成交规模)
+            ind_val = str(f['主力净流入-净额'])
+            # 6. 散户群体
+            retail_val = str(f['小单净流入-净额'])
 
-            # 4. 散户动向 (小单)
-            retail_inflow = str(f['小单净流入-净额'])
-            retail_tag = "🐣 散户入场" if "-" not in retail_inflow else "🍃 散户割肉"
+            # 顶部 6 个指标看板
+            c1, c2, c3 = st.columns(3)
+            c4, c5, c6 = st.columns(3)
             
-            # 四栏视觉展示
-            ca, cb, cc, cd = st.columns(4)
-            ca.metric(inst_tag, inst_inflow)
-            cb.metric(pe_tag, pe_inflow)
-            cc.metric(hot_tag, hot_inflow)
-            cd.metric(retail_tag, retail_inflow)
+            c1.metric("🏢 1.机构投资者", inst_val)
+            c2.metric("🔥 2.游资动向", hot_val)
+            c3.metric("🐂 3.大户/牛散", big_val)
+            c4.metric("🤖 4.量化资金", quant_tag)
+            c5.metric("🏭 5.产业资金", ind_val)
+            c6.metric("🐣 6.散户群体", retail_val)
             
             st.divider()
             
-            # 底部占比透视
-            c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("最新价", f"¥{d['price']}", f"{d['pct']}%")
-            c2.metric("机构占比", f"{f['超大单净流入-净占比']}%")
-            c3.metric("私募占比", f"{f['主力净流入-净占比']}%")
-            c4.metric("游资占比", f"{f['中单净流入-净占比']}%")
-            c5.metric("散户占比", f"{f['小单净流入-净占比']}%")
+            # 数据透视表 (用于快速对比)
+            st.write("📊 **板块占比全景图**")
+            data_df = pd.DataFrame({
+                "板块名称": ["机构", "游资", "大户/牛散", "量化/产业", "散户"],
+                "流入净占比": [
+                    f"{f['超大单净流入-净占比']}%",
+                    f"{f['大单净流入-净占比']}%",
+                    f"{f['中单净流入-净占比']}%",
+                    f"{f['主力净流入-净占比']}%",
+                    f"{f['小单净流入-净占比']}%"
+                ]
+            })
+            st.table(data_df)
             
             st.write("---")
-            st.subheader("📰 相关支撑新闻")
-            for n in d['news']:
-                st.write(f"· {n}")
+            st.subheader("📰 支撑面相关新闻")
+            for n in d['news']: st.write(f"· {n}")
         
         st.write("---")
         st.write("📈 **近期价格趋势**")
