@@ -17,7 +17,19 @@ if 'auto_refresh' not in st.session_state: st.session_state.auto_refresh = False
 
 CN_TZ = pytz.timezone('Asia/Shanghai')
 
-# --- 3. 核心数据引擎 (带断流保护) ---
+# --- 3. 核心辅助函数：智能单位转换 ---
+def format_money(value_str):
+    try:
+        val = float(value_str)
+        abs_val = abs(val)
+        if abs_val >= 100000000: # 超过1亿
+            return f"{val / 100000000:.2f} 亿"
+        else: # 万元单位
+            return f"{val / 10000:.1f} 万"
+    except:
+        return "N/A"
+
+# --- 4. 核心数据引擎 ---
 @st.cache_data(ttl=2)
 def get_stock_all_data(code):
     try:
@@ -41,7 +53,7 @@ def get_stock_all_data(code):
     except Exception as e:
         return {"success": False, "msg": "数据源繁忙"}
 
-# --- 4. 四灯算法逻辑 (🔴正面/强, 🟢负面/弱) ---
+# --- 5. 四灯算法逻辑 (🔴正面/强, 🟢负面/弱) ---
 def calculate_four_lamps(data):
     if not data or not data.get('success'):
         return {"trend": "⚪", "money": "⚪", "sentiment": "⚪", "safety": "⚪"}
@@ -62,7 +74,7 @@ def calculate_four_lamps(data):
         except: pass
     return {"trend": trend_lamp, "money": money_lamp, "sentiment": sentiment_lamp, "safety": safety_lamp}
 
-# --- 5. 权限验证 ---
+# --- 6. 权限验证 ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
@@ -79,7 +91,7 @@ if not st.session_state['logged_in']:
 
 client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
 
-# --- 6. 侧边栏 ---
+# --- 7. 侧边栏 ---
 with st.sidebar:
     st.title("🚀 控制中心")
     code = st.text_input("股票代码", value="600519").strip()
@@ -99,7 +111,7 @@ with st.sidebar:
 st.title(f"📈 文哥哥 AI 终端: {code}")
 tab1, tab2, tab3 = st.tabs(["🧠 AI 深度决策", "🎯 实时资金雷达", "📜 文哥哥·私募心法"])
 
-# --- Tab 1: AI 决策 (进度条版) ---
+# --- Tab 1: AI 决策 ---
 with tab1:
     if st.button("🚀 启动全维度 AI 建模", use_container_width=True):
         progress_text = "正在调取深度量化算力分析中..."
@@ -122,7 +134,7 @@ with tab1:
     if st.session_state.ai_cache:
         st.markdown(st.session_state.ai_cache['content'])
 
-# --- Tab 2: 实时资金雷达 (两行明细+万元版) ---
+# --- Tab 2: 实时资金雷达 ---
 with tab2:
     monitor_placeholder = st.empty()
     
@@ -146,7 +158,6 @@ with tab2:
         with monitor_placeholder.container():
             st.caption(f"🕒 北京时间: {bj_time} | {status_tag} | 🔴正面 🟢风险")
             
-            # 四灯显示
             st.write("### 🚦 核心策略哨兵")
             l1, l2, l3, l4 = st.columns(4)
             def draw_lamp(col, title, status, desc_red, desc_green):
@@ -168,25 +179,22 @@ with tab2:
             st.write("---")
             m1, m2 = st.columns(2)
             m1.metric("📌 当前价位", f"¥{data['price']}", f"{data['pct']}%")
-            # 资金流转万元
-            f_total = float(f['主力净流入-净额']) / 10000 if f is not None else 0
-            m2.metric("🌊 主力净额", f"{f_total:.2f} 万", "多方入场" if f_total > 0 else "空方减速")
+            # 主力净额单位智能转换
+            f_main = data['fund']['主力净流入-净额'] if data['fund'] is not None else 0
+            m2.metric("🌊 主力净额", format_money(f_main), "多方占优" if float(f_main) > 0 else "空方占优")
             
             st.write("---")
-            st.write("📊 **6大资金板块明细 (万元)**")
+            st.write("📊 **6大资金板块明细 (自动单位)**")
             if f is not None:
-                # 分成两行
                 r1_c1, r1_c2, r1_c3 = st.columns(3)
                 r2_c1, r2_c2, r2_c3 = st.columns(3)
                 
-                # 第一行
-                r1_c1.metric("🏢 机构投资者", f"{float(f['超大单净流入-净额'])/10000:.1f} 万")
-                r1_c2.metric("🔥 游资动向", f"{float(f['大单净流入-净额'])/10000:.1f} 万")
-                r1_c3.metric("🐂 大户牛散", f"{float(f['中单净流入-净额'])/10000:.1f} 万")
+                r1_c1.metric("🏢 机构投资者", format_money(f['超大单净流入-净额']))
+                r1_c2.metric("🔥 游资动向", format_money(f['大单净流入-净额']))
+                r1_c3.metric("🐂 大户牛散", format_money(f['中单净流入-净额']))
                 
-                # 第二行
                 r2_c1.metric("🤖 量化资金", "实时监控中")
-                r2_c2.metric("🏭 产业资金", f"{float(f['主力净流入-净额'])/10000:.1f} 万")
+                r2_c2.metric("🏭 产业资金", format_money(f['主力净流入-净额']))
                 r2_c3.metric("🐣 散户群体", f"{float(f['小单净流入-净占比']):.1f} %")
             
             st.line_chart(data['df'].set_index('日期')['收盘'], height=200)
@@ -207,12 +215,12 @@ with tab3:
     st.write("---")
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("#### **1. 📈 趋势灯**\n- **🔴 红色**：多头，持股。\n- **🟢 绿色**：走弱，防守。")
-        st.markdown("#### **2. 💰 资金灯**\n- **🔴 红色**：主力入场。\n- **🟢 绿色**：主力撤离。")
+        st.markdown("#### **1. 📈 趋势灯**\n- **🔴 红色**：多头走强。\n- **🟢 绿色**：趋势破位。")
+        st.markdown("#### **2. 💰 资金灯**\n- **🔴 红色**：主力进场。\n- **🟢 绿色**：主力出逃。")
     with col2:
-        st.markdown("#### **3. 🎭 情绪灯**\n- **🔴 红色**：买盘积极。\n- **🟢 绿色**：卖压沉重。")
-        st.markdown("#### **4. 🛡️ 安全灯**\n- **🔴 红色**：筹码锁定。\n- **🟢 绿色**：散户涌入。")
+        st.markdown("#### **3. 🎭 情绪灯**\n- **🔴 红色**：交投火热。\n- **🟢 绿色**：冰点观望。")
+        st.markdown("#### **4. 🛡️ 安全灯**\n- **🔴 红色**：筹码稳定。\n- **🟢 绿色**：散户接盘。")
     st.success("🛡️ **文哥哥提醒：只做红灯共振的机会，坚决远离绿灯密集的区域。**")
 
 st.divider()
-st.caption(f"文哥哥专用 | 2026.01.12 | 万元版")
+st.caption(f"文哥哥专用 | 2026.01.12 | 亿/万智能切换版")
