@@ -6,42 +6,18 @@ from fpdf import FPDF
 import time
 from datetime import datetime
 
-# --- 1. 页面配置与昼夜模式逻辑 ---
+# --- 1. 页面配置 (固定专业视觉) ---
 st.set_page_config(page_title="文哥哥AI金融终端", page_icon="📈", layout="wide")
 
-# 侧边栏：控制台
-with st.sidebar:
-    st.header("⚙️ 终端控制")
-    # 昼夜模式切换
-    theme_mode = st.select_slider("显示模式", options=["🌞 浅色", "🌙 深色"], value="🌙 深色")
-    st.divider()
-    stock_code = st.text_input("📍 输入股票代码", value="600519")
-    # 深度分析时间线选择
-    time_span = st.select_slider(
-        "⏳ 分析时间跨度",
-        options=["近一周", "近一月", "近三月", "近半年", "近一年"],
-        value="近三月"
-    )
-    st.divider()
-    if st.button("🔴 安全退出系统"):
-        st.session_state['logged_in'] = False
-        st.rerun()
-
-# 动态 UI 美化 CSS
-if theme_mode == "🌙 深色":
-    bg_color, text_color, card_bg, border_color = "#0e1117", "#ffffff", "#1d2129", "#444"
-else:
-    bg_color, text_color, card_bg, border_color = "#ffffff", "#31333F", "#f0f2f6", "#ddd"
-
-st.markdown(f"""
+st.markdown("""
     <style>
-    .stApp {{ background-color: {bg_color}; color: {text_color}; }}
-    .stMetric {{ background-color: {card_bg}; padding: 15px; border-radius: 10px; border: 1px solid {border_color}; }}
-    .report-box {{ background-color: {card_bg}; padding: 25px; border-radius: 15px; border-left: 6px solid #ff4b4b; color: {text_color}; line-height: 1.8; }}
+    .stApp { background-color: #0e1117; color: #ffffff; }
+    .stMetric { background-color: #1d2129; padding: 15px; border-radius: 10px; border: 1px solid #444; }
+    .report-box { background-color: #1d2129; padding: 25px; border-radius: 15px; border-left: 6px solid #ff4b4b; color: #ffffff; line-height: 1.8; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 安全门禁（访问密钥） ---
+# --- 2. 安全验证 (Secrets 读取) ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
@@ -54,106 +30,121 @@ if not st.session_state['logged_in']:
                 st.session_state['logged_in'] = True
                 st.rerun()
             else:
-                st.error("密钥无效，拒绝访问")
+                st.error("密钥无效")
     else:
-        st.error("⚠️ 请在 Secrets 中配置 access_password")
+        st.error("⚠️ 请在 Secrets 中设置 access_password")
     st.stop()
 
 # --- 3. 核心 API 初始化 ---
 client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
 
 # --- 4. 辅助函数：PDF 导出 ---
-class StockPDF(FPDF):
-    def header(self):
-        self.set_font('helvetica', 'B', 15)
-        self.cell(0, 10, 'Stock Analysis Deep Report', 0, 1, 'C')
-        self.ln(5)
-
 def create_pdf(report_content, code, name):
-    pdf = StockPDF()
+    pdf = FPDF()
     pdf.add_page()
     pdf.set_font("helvetica", size=12)
     pdf.cell(0, 10, f"Target: {name} ({code})", 0, 1)
     pdf.cell(0, 10, f"Date: {datetime.now().strftime('%Y-%m-%d')}", 0, 1)
     pdf.ln(5)
-    # 处理编码问题
     safe_text = report_content.encode('latin-1', 'replace').decode('latin-1')
     pdf.multi_cell(0, 10, safe_text)
     return pdf.output()
 
 # --- 5. 主程序界面 ---
-st.title("🚀 文哥哥 A股主力追踪 & AI 决策系统")
+st.title("🚀 文哥哥 A股极速追踪系统")
 
-tab1, tab2 = st.tabs(["🎯 主力查询跟踪", "🤖 DeepSeek 深度分析"])
+with st.sidebar:
+    st.header("🔍 分析配置")
+    stock_code = st.text_input("📍 股票代码", value="600519")
+    time_span = st.select_slider(
+        "⏳ 时间跨度",
+        options=["近一周", "近一月", "近三月", "近半年", "近一年"],
+        value="近三月"
+    )
+    st.divider()
+    if st.button("🔴 退出系统"):
+        st.session_state['logged_in'] = False
+        st.rerun()
 
-# --- 功能一：主力查询跟踪 ---
+tab1, tab2 = st.tabs(["🎯 主力追踪雷达", "🤖 DeepSeek 深度决策"])
+
+# --- 功能一：主力查询 (极致提速版) ---
 with tab1:
-    if st.button("📡 执行主力信号扫描"):
-        with st.status("正在截获实时主力筹码流向...", expanded=True) as status:
-            try:
-                # 1. 抓取行情
-                df_spot = ak.stock_zh_a_spot_em()
-                target_spot = df_spot[df_spot['代码'] == stock_code].iloc[0]
-                # 2. 抓取资金流
-                market = "sh" if stock_code.startswith(('6', '9', '688')) else "sz"
-                df_fund = ak.stock_individual_fund_flow(stock=stock_code, market=market)
-                latest_fund = df_fund.iloc[0]
-                
-                status.update(label="✅ 主力信号同步完成", state="complete")
-                
-                st.subheader(f"📊 {target_spot['名称']} ({stock_code}) 实时资金看板")
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("最新价", f"¥{target_spot['最新价']}", f"{target_spot['涨跌幅']}%")
-                c2.metric("主力净流入", f"{latest_fund['主力净流入-净额']}元")
-                c3.metric("主力净占比", f"{latest_fund['主力净流入-净占比']}%")
-                c4.metric("超大单流入", f"{latest_fund['超大单净流入-净额']}元")
-                
-                st.write("📈 **近20日主力资金流入趋势**")
-                st.line_chart(df_fund.head(20).set_index('日期')['主力净流入-净额'])
-                
-            except Exception as e:
-                st.error(f"数据扫描失败: {e}")
+    if st.button("📡 扫描主力信号"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # 第一阶段：极速获取个股行情
+            status_text.text("1/3 正在连接交易所极速通道...")
+            progress_bar.progress(30)
+            df_info = ak.stock_individual_info_em(symbol=stock_code)
+            name = df_info[df_info['item'] == '股票名称']['value'].values[0]
+            price = df_info[df_info['item'] == '最新价']['value'].values[0]
+            change = df_info[df_info['item'] == '当日涨跌幅']['value'].values[0]
+            
+            # 第二阶段：主力流向分析
+            status_text.text("2/3 正在拦截主力实时大单数据...")
+            progress_bar.progress(70)
+            market = "sh" if stock_code.startswith(('6', '9', '688')) else "sz"
+            df_fund = ak.stock_individual_fund_flow(stock=stock_code, market=market)
+            latest_fund = df_fund.iloc[0]
+            
+            # 第三阶段：完成展示
+            progress_bar.progress(100)
+            status_text.text("✅ 扫描完成")
+            time.sleep(0.5)
+            status_text.empty()
+            progress_bar.empty()
 
-# --- 功能二：DeepSeek 深度分析 ---
+            st.subheader(f"📊 {name} ({stock_code}) 主力看板")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("最新价", f"¥{price}", f"{change}%")
+            c2.metric("主力净额", f"{latest_fund['主力净流入-净额']}")
+            c3.metric("主力占比", f"{latest_fund['主力净流入-净占比']}%")
+            c4.metric("超大单", f"{latest_fund['超大单净流入-净额']}")
+            
+            st.write("📈 **近期主力资金活跃度**")
+            st.line_chart(df_fund.head(15).set_index('日期')['主力净流入-净额'])
+            
+        except Exception as e:
+            st.error(f"获取失败，请确保代码正确: {e}")
+
+# --- 功能二：深度分析 (AI 提速版) ---
 with tab2:
-    if st.button("🧠 启动 DeepSeek 深度建模"):
+    if st.button("🚀 启动 AI 建模分析"):
+        progress_bar = st.progress(0)
+        status_text = st.empty()
         span_map = {"近一周": 5, "近一月": 20, "近三月": 60, "近半年": 120, "近一年": 250}
-        with st.spinner(f'正在基于 {time_span} 维度进行智能研判...'):
-            try:
-                # 获取数据
-                df_spot = ak.stock_zh_a_spot_em()
-                target_spot = df_spot[df_spot['代码'] == stock_code].iloc[0]
-                hist = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq").tail(span_map[time_span])
-                
-                # AI 提示词指令
-                prompt = f"""
-                你是一名顶尖A股策略分析师。请针对股票 {target_spot['名称']} ({stock_code}) 在【{time_span}】的时间跨度下进行深度分析。
-                当前价格：{target_spot['最新价']}。
-                请务必按以下格式给出结论：
-                1. 【核心决策】：明确给出【建议购入】、【建议出手】或【暂时观望】。
-                2. 【目标价预测】：明确给出未来3个月的目标价格。
-                3. 【空间判读】：给出核心的支撑位和压力位。
-                4. 【主力动向】：结合当前筹码状态评估主力意图。
-                """
-                
-                response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
-                full_report = response.choices[0].message.content
-                
-                st.subheader(f"📋 DeepSeek 投资决策建议书 ({time_span})")
-                st.markdown(f'<div class="report-box">{full_report}</div>', unsafe_allow_html=True)
-                
-                # PDF 导出
-                st.divider()
-                pdf_data = create_pdf(full_report, stock_code, target_spot['名称'])
-                st.download_button(
-                    label="📥 导出 PDF 深度报告",
-                    data=pdf_data,
-                    file_name=f"Report_{stock_code}.pdf",
-                    mime="application/pdf"
-                )
-                
-            except Exception as e:
-                st.error(f"AI 分析中断: {e}")
+        
+        try:
+            status_text.text(f"1/3 正在提取 {time_span} 历史筹码...")
+            progress_bar.progress(30)
+            hist = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="qfq").tail(span_map[time_span])
+            
+            status_text.text("2/3 DeepSeek 正在极速生成决策报告...")
+            progress_bar.progress(70)
+            
+            # 简化的 Prompt 提升 AI 响应速度
+            prompt = f"""
+            分析股票代码 {stock_code} ({time_span})。现价约为历史周期末位。
+            1.【建议决策】：明确给出【建议购入】、【建议出手】或【暂时观望】。
+            2.【目标预测】：未来3个月目标价。
+            3.【空间判读】：核心支撑位、压力位。
+            4.【主力评估】：结合当前筹码简述意图。
+            """
+            
+            response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
+            full_report = response.choices[0].message.content
+            
+            progress_bar.progress(100)
+            status_text.text("✅ 报告已就绪")
+            time.sleep(0.5)
+            status_text.empty()
+            progress_bar.empty()
 
-st.divider()
-st.caption("文哥哥专属 AI 操盘助理 | 股市有风险 入市需谨慎")
+            st.subheader(f"📋 投资决策建议书 ({time_span})")
+            st.markdown(f'<div class="report-box">{full_report}</div>', unsafe_allow_html=True)
+            
+            # PDF 导出
+            pdf_data = create_pdf(full_report, stock_
