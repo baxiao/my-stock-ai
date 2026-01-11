@@ -22,14 +22,14 @@ def get_stock_all_data(code):
         if df_hist.empty: return {"success": False, "msg": "未找到代码"}
         latest = df_hist.iloc[-1]
         
-        # B. 实时新闻 (新增)
+        # B. 实时新闻
         try:
             news_df = ak.stock_news_em(symbol=code).head(5)
             news_list = news_df['新闻标题'].tolist() if not news_df.empty else ["暂无最新相关新闻"]
         except:
             news_list = ["新闻接口调用受限"]
 
-        # C. 资金流向与占比 (新增)
+        # C. 资金流向与占比
         fund = None
         try:
             mkt = "sh" if code.startswith(('6', '9', '688')) else "sz"
@@ -73,7 +73,6 @@ with st.sidebar:
     st.title("🚀 控制中心")
     code = st.text_input("股票代码", value="600519").strip()
     
-    # 如果代码换了，清空所有缓存
     if code != st.session_state.last_code:
         st.session_state.ai_cache = None
         st.session_state.fund_cache = None
@@ -86,7 +85,7 @@ with st.sidebar:
 
 st.title(f"📈 文哥哥 AI 终端: {code}")
 
-tab1, tab2 = st.tabs(["🧠 AI 深度决策", "🎯 主力追踪雷达"])
+tab1, tab2 = st.tabs(["🧠 AI 深度决策", "🎯 资金追踪雷达"])
 
 # --- Tab 1: AI 决策 (集成新闻判断) ---
 with tab1:
@@ -94,13 +93,11 @@ with tab1:
         with st.status("正在整合行情、资金、新闻面...", expanded=True) as status:
             data = get_stock_all_data(code)
             if data["success"]:
-                # 资金方向判断
                 fund_direction = "数据暂缺"
                 if data['fund'] is not None:
                     inflow_val = str(data['fund']['主力净流入-净额'])
                     fund_direction = f"主力净流入 {inflow_val} (" + ("正在【入场】抢筹" if "-" not in inflow_val else "正在【离场】观望") + ")"
                 
-                # 新闻内容聚合
                 news_text = "\n".join([f"- {n}" for n in data['news']])
                 
                 prompt = f"""
@@ -129,7 +126,6 @@ with tab1:
                 st.session_state.ai_cache = {"content": response.choices[0].message.content, "price": data['price']}
                 status.update(label="✅ AI 决策已就绪", state="complete")
 
-    # 显示缓存内容
     if st.session_state.ai_cache:
         c = st.session_state.ai_cache
         st.success(f"**分析基准价**: ¥{c['price']}")
@@ -138,31 +134,44 @@ with tab1:
     else:
         st.info("💡 请点击按钮开始 AI 深度决策分析")
 
-# --- Tab 2: 主力雷达 (新增资金占比) ---
+# --- Tab 2: 资金雷达 (主力+游资并列分析) ---
 with tab2:
-    if st.button("📡 扫描实时主力动态", use_container_width=True):
+    if st.button("📡 扫描实时资金动向", use_container_width=True):
         with st.spinner("拦截筹码中..."):
             data = get_stock_all_data(code)
             if data["success"]:
                 st.session_state.fund_cache = data
     
-    # 显示缓存内容
     if st.session_state.fund_cache:
         d = st.session_state.fund_cache
         if d['fund'] is not None:
             f = d['fund']
-            inflow = str(f['主力净流入-净额'])
             
-            if "-" not in inflow:
-                st.error(f"🔴 主力净流入: {inflow} (强势入场)")
-            else:
-                st.success(f"🟢 主力净流入: {inflow} (获利离场/洗盘)")
+            # --- 1. 主力判断 (超大单+大单) ---
+            main_inflow = str(f['主力净流入-净额'])
+            main_color = "error" if "-" not in main_inflow else "success"
+            main_tag = "🔴 主力强势进场" if "-" not in main_inflow else "🟢 主力获利洗盘"
             
+            # --- 2. 游资判断 (中单) ---
+            hot_inflow = str(f['中单净流入-净额'])
+            hot_tag = "🔥 游资积极参与" if "-" not in hot_inflow else "🌬️ 游资离场观望"
+            
+            # 视觉展示
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.subheader(main_tag)
+                st.write(f"净流入: **{main_inflow}**")
+            with col_b:
+                st.subheader(hot_tag)
+                st.write(f"净流入: **{hot_inflow}**")
+            
+            st.divider()
+            
+            # 四列指标
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("最新价", f"¥{d['price']}", f"{d['pct']}%")
-            c2.metric("主力净流", inflow)
-            # 新增：主力资金占比
-            c3.metric("主力占比", f"{f['主力净流入-净占比']}%")
+            c2.metric("主力占比", f"{f['主力净流入-净占比']}%")
+            c3.metric("游资占比", f"{f['中单净流入-净占比']}%") # 中单通常代表活跃游资
             c4.metric("超大单占比", f"{f['超大单净流入-净占比']}%")
             
             st.write("---")
@@ -171,9 +180,10 @@ with tab2:
                 st.write(f"· {n}")
         
         st.write("---")
+        st.write("📈 **近期价格趋势**")
         st.line_chart(d['df'].set_index('日期')['收盘'])
     else:
-        st.info("💡 请点击按钮获取主力资金与占比分析")
+        st.info("💡 请点击按钮获取主力与游资占比分析")
 
 st.divider()
-st.caption("文哥哥专用 | 记忆化Tab切换 | 新闻+资金占比增强版")
+st.caption("文哥哥专用 | 主力+游资双线监控 | 记忆化Tab版")
