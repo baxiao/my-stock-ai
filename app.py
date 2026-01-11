@@ -8,28 +8,28 @@ from datetime import datetime
 # --- 1. 页面配置 ---
 st.set_page_config(page_title="文哥哥极速终端", page_icon="🚀", layout="wide")
 
-# --- 2. 持久化记忆 (切换TAB不消失) ---
+# --- 2. 初始化持久化记忆 (实现切换TAB不消失) ---
 if 'ai_cache' not in st.session_state: st.session_state.ai_cache = None
 if 'fund_cache' not in st.session_state: st.session_state.fund_cache = None
 if 'last_code' not in st.session_state: st.session_state.last_code = ""
 
-# --- 3. 核心取数逻辑 ---
+# --- 3. 核心数据取数逻辑 ---
 @st.cache_data(ttl=60)
 def get_stock_all_data(code):
     try:
-        # A. 基础行情
+        # A. 基础行情与K线
         df_hist = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq").tail(30)
-        if df_hist.empty: return {"success": False, "msg": "代码错误"}
+        if df_hist.empty: return {"success": False, "msg": "未找到代码"}
         latest = df_hist.iloc[-1]
         
-        # B. 实时新闻
+        # B. 实时新闻 (新增)
         try:
             news_df = ak.stock_news_em(symbol=code).head(5)
-            news_list = news_df['新闻标题'].tolist() if not news_df.empty else ["暂无最新新闻"]
+            news_list = news_df['新闻标题'].tolist() if not news_df.empty else ["暂无最新相关新闻"]
         except:
-            news_list = ["新闻接口延迟"]
+            news_list = ["新闻接口调用受限"]
 
-        # C. 资金占比与流向
+        # C. 资金流向与占比 (新增)
         fund = None
         try:
             mkt = "sh" if code.startswith(('6', '9', '688')) else "sz"
@@ -51,20 +51,7 @@ def get_stock_all_data(code):
     except Exception as e:
         return {"success": False, "msg": str(e)}
 
-# --- 4. 辅助：查询倒计时组件 ---
-def processing_timer(duration=10):
-    """显示倒计时进度条"""
-    p_bar = st.progress(0)
-    msg = st.empty()
-    for i in range(duration):
-        countdown = duration - i
-        p_bar.progress((i + 1) * (100 // duration))
-        msg.warning(f"⏳ 文哥哥请稍等，深度分析中... 剩余 {countdown} 秒")
-        time.sleep(1)
-    msg.empty()
-    p_bar.empty()
-
-# --- 5. 安全验证 ---
+# --- 4. 安全验证 ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
@@ -81,14 +68,17 @@ if not st.session_state['logged_in']:
 
 client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
 
-# --- 6. 侧边栏 ---
+# --- 5. 侧边栏与代码更换逻辑 ---
 with st.sidebar:
     st.title("🚀 控制中心")
     code = st.text_input("股票代码", value="600519").strip()
+    
+    # 如果代码换了，清空所有缓存
     if code != st.session_state.last_code:
         st.session_state.ai_cache = None
         st.session_state.fund_cache = None
         st.session_state.last_code = code
+        
     st.divider()
     if st.button("🔴 退出系统"):
         st.session_state['logged_in'] = False
@@ -98,22 +88,38 @@ st.title(f"📈 文哥哥 AI 终端: {code}")
 
 tab1, tab2 = st.tabs(["🧠 AI 深度决策", "🎯 主力追踪雷达"])
 
-# --- Tab 1: AI 决策 ---
+# --- Tab 1: AI 决策 (集成新闻判断) ---
 with tab1:
     if st.button("🚀 启动全维度 AI 建模", use_container_width=True):
-        # 启动倒计时
-        processing_timer(5)
-        
-        with st.status("正在注入多源数据...", expanded=True) as status:
+        with st.status("正在整合行情、资金、新闻面...", expanded=True) as status:
             data = get_stock_all_data(code)
             if data["success"]:
-                fund_dir = "暂无"
+                # 资金方向判断
+                fund_direction = "数据暂缺"
                 if data['fund'] is not None:
-                    val = str(data['fund']['主力净流入-净额'])
-                    fund_dir = f"主力净流入 {val} (" + ("进场" if "-" not in val else "离场") + ")"
+                    inflow_val = str(data['fund']['主力净流入-净额'])
+                    fund_direction = f"主力净流入 {inflow_val} (" + ("正在【入场】抢筹" if "-" not in inflow_val else "正在【离场】观望") + ")"
                 
-                news_str = "\n".join(data['news'])
-                prompt = f"分析股票 {code}。价格:{data['price']}, 涨幅:{data['pct']}%, 资金:{fund_dir}, 新闻:{news_str}。请按5个部分回复(决策、周预测、月预测、空间、总结)，每个标题一行。"
+                # 新闻内容聚合
+                news_text = "\n".join([f"- {n}" for n in data['news']])
+                
+                prompt = f"""
+                你是一名专业的资深股票分析师。请结合行情、资金、新闻分析股票 {code}。
+                价格：{data['price']} 元，涨跌幅：{data['pct']}%
+                资金面：{fund_direction}
+                最新新闻：{news_text}
+
+                ### 强制要求：
+                1. 标题必须独立成行，严禁合并。
+                2. 必须包含对【新闻面】的利好/利空解读。
+
+                ### 必须输出的五个部分：
+                1.【建议决策】：明确给出【建议购入】、【建议出手】或【暂时观望】。
+                2.【短期预测】：未来一周的目标价格区间。
+                3.【中期预测】：未来3个月的目标价格区间。
+                4.【空间分析】：最新的核心支撑位和压力位。
+                5.【趋势总结】：结合新闻、主力资金和技术面给出总结。
+                """
                 
                 response = client.chat.completions.create(
                     model="deepseek-chat",
@@ -121,43 +127,53 @@ with tab1:
                     max_tokens=800, temperature=0.2 
                 )
                 st.session_state.ai_cache = {"content": response.choices[0].message.content, "price": data['price']}
-                status.update(label="✅ 分析完成", state="complete")
+                status.update(label="✅ AI 决策已就绪", state="complete")
 
+    # 显示缓存内容
     if st.session_state.ai_cache:
         c = st.session_state.ai_cache
-        st.success(f"**基准价**: ¥{c['price']}")
+        st.success(f"**分析基准价**: ¥{c['price']}")
         st.markdown(c['content'])
         st.code(c['content'])
+    else:
+        st.info("💡 请点击按钮开始 AI 深度决策分析")
 
-# --- Tab 2: 主力雷达 ---
+# --- Tab 2: 主力雷达 (新增资金占比) ---
 with tab2:
     if st.button("📡 扫描实时主力动态", use_container_width=True):
-        processing_timer(3) # 资金扫描只需3秒
-        data = get_stock_all_data(code)
-        if data["success"]:
-            st.session_state.fund_cache = data
+        with st.spinner("拦截筹码中..."):
+            data = get_stock_all_data(code)
+            if data["success"]:
+                st.session_state.fund_cache = data
     
+    # 显示缓存内容
     if st.session_state.fund_cache:
         d = st.session_state.fund_cache
         if d['fund'] is not None:
             f = d['fund']
             inflow = str(f['主力净流入-净额'])
-            status_msg = f"🔴 主力净流入: {inflow} (强势入场)" if "-" not in inflow else f"🟢 主力净流入: {inflow} (获利离场)"
-            st.subheader(status_msg)
+            
+            if "-" not in inflow:
+                st.error(f"🔴 主力净流入: {inflow} (强势入场)")
+            else:
+                st.success(f"🟢 主力净流入: {inflow} (获利离场/洗盘)")
             
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("价格", f"¥{d['price']}", f"{d['pct']}%")
-            c2.metric("主力占比", f"{f['主力净流入-净占比']}%")
-            c3.metric("超大单占比", f"{f['超大单净流入-净占比']}%")
-            c4.metric("中单占比", f"{f['中单净流入-净占比']}%")
+            c1.metric("最新价", f"¥{d['price']}", f"{d['pct']}%")
+            c2.metric("主力净流", inflow)
+            # 新增：主力资金占比
+            c3.metric("主力占比", f"{f['主力净流入-净占比']}%")
+            c4.metric("超大单占比", f"{f['超大单净流入-净占比']}%")
             
             st.write("---")
-            st.subheader("📰 核心舆情支持")
+            st.subheader("📰 相关支撑新闻")
             for n in d['news']:
                 st.write(f"· {n}")
         
         st.write("---")
         st.line_chart(d['df'].set_index('日期')['收盘'])
+    else:
+        st.info("💡 请点击按钮获取主力资金与占比分析")
 
 st.divider()
-st.caption("文哥哥专用 | 倒计时安全查询模式 | 稳定运行版")
+st.caption("文哥哥专用 | 记忆化Tab切换 | 新闻+资金占比增强版")
