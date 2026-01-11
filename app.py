@@ -46,7 +46,7 @@ def get_stock_all_data(code):
     except Exception as e:
         return {"success": False, "msg": str(e)}
 
-# --- 4. 四灯算法逻辑核心 (颜色调换：红色正面，绿色负面) ---
+# --- 4. 四灯算法逻辑 (红色正面🔴，绿色负面🟢) ---
 def calculate_four_lamps(data):
     if not data or not data.get('success'):
         return {"trend": "⚪", "money": "⚪", "sentiment": "⚪", "safety": "⚪"}
@@ -55,18 +55,11 @@ def calculate_four_lamps(data):
     ma5 = df['收盘'].tail(5).mean()
     ma20 = df['收盘'].tail(20).mean()
     
-    # 1. 趋势灯: 走强为红
     trend_lamp = "🔴" if ma5 > ma20 else "🟢"
-    
-    # 2. 资金灯: 买入为红
     money_lamp = "🟢"
     if fund is not None:
         if "-" not in str(fund['主力净流入-净额']): money_lamp = "🔴"
-            
-    # 3. 情绪灯: 上涨为红
     sentiment_lamp = "🔴" if data['pct'] > 0 else "🟢"
-    
-    # 4. 安全灯: 筹码锁定(散户少)为红
     safety_lamp = "🟢"
     if fund is not None:
         if float(fund['小单净流入-净占比']) < 20: safety_lamp = "🔴"
@@ -108,7 +101,6 @@ st.title(f"📈 文哥哥 AI 终端: {code}")
 
 tab1, tab2, tab3 = st.tabs(["🧠 AI 深度决策", "🎯 实时资金雷达", "📜 文哥哥·私募心法"])
 
-# --- Tab 1: AI 决策 ---
 with tab1:
     if st.button("🚀 启动全维度 AI 建模", use_container_width=True):
         data = get_stock_all_data(code)
@@ -121,85 +113,94 @@ with tab1:
     if st.session_state.ai_cache:
         st.markdown(st.session_state.ai_cache['content'])
 
-# --- Tab 2: 实时资金雷达 ---
+# --- Tab 2: 实时资金雷达 (修复渲染错误) ---
 with tab2:
-    main_placeholder = st.empty()
-    def draw_ui():
+    placeholder = st.empty()
+    
+    def render_content():
         data = get_stock_all_data(code)
         if data["success"]:
             f = data['fund']
             lamps = calculate_four_lamps(data)
             fund_line = float(f['主力净流入-净占比']) if f is not None else 0
             bj_time = datetime.now(CN_TZ).strftime('%H:%M:%S')
-            with main_placeholder.container():
-                st.caption(f"🕒 最后更新时间: {bj_time} | 红灯代表正面，绿灯代表负面")
+            
+            with placeholder.container():
+                st.caption(f"🕒 中国标准时间: {bj_time} | 🔴正面信号 🟢风险警告")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("📌 当前价位", f"¥{data['price']}", f"{data['pct']}%")
-                m2.metric("🌊 核心资金线", f"{fund_line}%", "强力" if fund_line > 0 else "走弱")
+                m2.metric("🌊 核心资金线", f"{fund_line}%", "多方占优" if fund_line > 0 else "空方占优")
                 m3.metric("🚦 综合灯效", f"{lamps['trend']}{lamps['money']}{lamps['sentiment']}{lamps['safety']}")
+                
                 st.write("---")
                 l1, l2, l3, l4 = st.columns(4)
-                l1.error(f"趋势: {lamps['trend']}") if lamps['trend']=="🔴" else l1.success(f"趋势: {lamps['trend']}")
-                l2.error(f"资金: {lamps['money']}") if lamps['money']=="🔴" else l2.success(f"资金: {lamps['money']}")
-                l3.error(f"情绪: {lamps['sentiment']}") if lamps['sentiment']=="🔴" else l3.success(f"情绪: {lamps['sentiment']}")
-                l4.error(f"安全: {lamps['safety']}") if lamps['safety']=="🔴" else l4.success(f"安全: {lamps['safety']}")
+                # 使用 error 表示红色(正面警告色在UI中需语义化处理，这里统一用颜色块)
+                with l1: st.markdown(f"**趋势**\n# {'🔴' if lamps['trend']=='🔴' else '🟢'}")
+                with l2: st.markdown(f"**资金**\n# {'🔴' if lamps['money']=='🔴' else '🟢'}")
+                with l3: st.markdown(f"**情绪**\n# {'🔴' if lamps['sentiment']=='🔴' else '🟢'}")
+                with l4: st.markdown(f"**安全**\n# {'🔴' if lamps['safety']=='🔴' else '🟢'}")
+                
                 st.write("---")
+                st.write("📊 **6大资金板块动态**")
                 if f is not None:
                     c1, c2, c3 = st.columns(3); c4, c5, c6 = st.columns(3)
                     c1.metric("🏢 1.机构投资者", f['超大单净流入-净额'])
                     c2.metric("🔥 2.游资动向", f['大单净流入-净额'])
                     c3.metric("🐂 3.大户/牛散", f['中单净流入-净额'])
-                    c4.metric("🤖 4.量化资金", "🤖 模拟中")
+                    c4.metric("🤖 4.量化资金", "🤖 扫描中")
                     c5.metric("🏭 5.产业资金", f['主力净流入-净额'])
                     c6.metric("🐣 6.散户群体", f['小单净流入-净额'])
                 st.line_chart(data['df'].set_index('日期')['收盘'], height=200)
 
+    # 自动刷新逻辑，避免 DeltaGenerator 错误
     if st.session_state.auto_refresh:
         while st.session_state.auto_refresh:
-            draw_ui(); time.sleep(1)
+            render_content()
+            time.sleep(1)
     else:
-        draw_ui()
-        if st.button("🔄 同步实时数据"): draw_ui()
+        render_content()
+        if st.button("🔄 同步实时数据"): render_content()
 
-# --- Tab 3: 文哥哥·私募心法 (增强红灯说明 + 颜色反转) ---
+# --- Tab 3: 文哥哥·私募心法 (增强版) ---
 with tab3:
-    st.markdown("## 📜 文哥哥·私募心法 (四灯双向深度解析)")
-    st.info("注：本终端遵循 A 股逻辑：🔴 红色代表强度与机会，🟢 绿色代表走弱与风险。")
+    st.markdown("## 📜 文哥哥·私募心法")
+    st.info("💡 视觉核心：遵循 A 股特色，🔴 红色代表强度与机会，🟢 绿色代表走弱与风险。")
     
-    st.write("---")
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("""
         #### **1. 📈 趋势灯 (Trend)**
-        - **🔴 红灯 (走强)**：MA5站在MA20之上，多头发力，顺势而为。
-        - **🟢 绿灯 (警惕)**：价格跌破生命线，重心下移，谨防阴跌。
+        - **🔴 红灯 (走强)**：多头排列，顺势而为。
+        - **🟢 绿灯 (风险)**：趋势破位，建议止损。
         
         #### **2. 💰 资金灯 (Money)**
-        - **🔴 红灯 (吸筹)**：主力资金呈现净买入状态，真金白银在护盘。
-        - **🟢 绿灯 (派发)**：主力大单持续流出，筹码正向散户搬家。
+        - **🔴 红灯 (吸筹)**：主力买入，真金白银护盘。
+        - **🟢 绿灯 (流出)**：主力派发，筹码搬家散户。
         """)
     with col2:
         st.markdown("""
         #### **3. 🎭 情绪灯 (Sentiment)**
-        - **🔴 红灯 (高昂)**：日内涨幅为正，买气盖过卖气，人气聚集。
-        - **🟢 绿灯 (低迷)**：阴线回调，市场信心不足，观望情绪浓厚。
+        - **🔴 红灯 (高昂)**：人气聚集，买盘积极。
+        - **🟢 绿灯 (低迷)**：信心不足，卖盘占优。
         
         #### **4. 🛡️ 安全灯 (Safety)**
-        - **🔴 红灯 (安全)**：散户占比极低，筹码高度集中在私募/机构手中。
-        - **🟢 绿灯 (风险)**：散户大幅涌入接盘，筹码松动，容易引发踩踏。
+        - **🔴 红灯 (安全)**：筹码高度集中，散户占比低。
+        - **🟢 绿灯 (危险)**：散户涌入接盘，易生踩踏。
         """)
 
     st.write("---")
-    st.subheader("💡 实战博弈总结")
+    st.subheader("🎯 资金博弈模型说明")
+    
+    # 插入示意图帮助理解资金博弈
+    
+
     st.markdown("""
-    | 信号组合 | 逻辑状态 | 操盘策略 |
-    | :--- | :--- | :--- |
-    | **四灯连红** | **全共振** | 核心主升浪，坚定持股，享受利润。 |
-    | **灯光闪绿** | **局部背离** | 警惕资金偷跑或趋势转折，观察能否修复。 |
-    | **多重绿灯** | **风险扩散** | 资金撤退且趋势破位，执行止损或减仓。 |
-    | **全绿监控** | **彻底冰点** | 弱势震荡或阴跌不止，管住手不抄底。 |
+    | 信号组合 | 操盘建议 |
+    | :--- | :--- |
+    | **四灯连红** | **【龙抬头】**。重仓持股，享受主升浪。 |
+    | **灯光闪绿** | **【变盘点】**。警惕资金偷跑，观察支撑。 |
+    | **多重绿灯** | **【撤退令】**。执行止损，君子不立危墙。 |
     """)
-    st.success("🛡️ **文哥哥提醒：只做红灯共振，远离绿灯深渊。**")
 
 st.divider()
-st.caption(f"文哥哥专用 | 私募心法增强版 | 北京时间: {datetime.now(CN_TZ).strftime('%Y-%m-%d %H:%M')}")
+st.caption(f"文哥哥专用 | 北京时间: {datetime.now(CN_TZ).strftime('%Y-%m-%d %H:%M')}")
