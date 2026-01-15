@@ -57,7 +57,7 @@ def get_stock_data_parallel(code):
         return {"success": True, "price": df_hist.iloc[-1]['收盘'], "pct": df_hist.iloc[-1]['涨跌幅'], "fund": df_fund.iloc[0] if not df_fund.empty else None, "df": df_hist}
     except Exception as e: return {"success": False, "msg": str(e)}
 
-# --- 6. 四灯逻辑 ---
+# --- 6. 四灯逻辑算法 ---
 def calculate_four_lamps(data):
     if not data or not data.get('success'): return {"trend": "⚪", "money": "⚪", "sentiment": "⚪", "safety": "⚪"}
     df, fund = data['df'], data['fund']
@@ -70,33 +70,35 @@ def calculate_four_lamps(data):
     }
     return l
 
-# --- 7. 登录 ---
+# --- 7. 登录控制 ---
 if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
 if not st.session_state['logged_in']:
     st.title("🔐 文哥哥私人终端")
     pwd = st.text_input("访问密钥", type="password")
-    if st.button("开启", use_container_width=True):
+    if st.button("开启终端", use_container_width=True):
         if pwd == st.secrets["access_password"]: st.session_state['logged_in'] = True; st.rerun()
         else: st.error("密钥错误")
     st.stop()
 
 client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
 
-# --- 8. 界面逻辑 ---
+# --- 8. 侧边栏 ---
 with st.sidebar:
     st.title("🚀 控制中心")
-    code = st.text_input("代码", value="600519").strip()
+    code = st.text_input("股票代码", value="600519").strip()
     if code != st.session_state.last_code:
         st.session_state.last_code, st.session_state.ai_cache, st.session_state.last_data = code, None, None
+    st.divider()
     st.session_state.auto_refresh = st.checkbox("🔄 秒级无闪刷新", value=st.session_state.auto_refresh)
     if st.button("🔴 退出系统"): st.session_state['logged_in'] = False; st.rerun()
 
 st.title(f"📈 文哥哥 AI 终端: {code}")
-t1, t2, t3 = st.tabs(["🧠 AI 深度决策", "🎯 实时资金雷达", "📜 文哥哥·私募心法"])
+t1, t2 = st.tabs(["🧠 AI 深度决策", "🎯 实时资金雷达"])
 
+# --- Tab 1: AI 深度决策 ---
 with t1:
     if st.button("🚀 启动全维度 AI 建模", use_container_width=True):
-        p_bar = st.progress(0, text="多线程并发建模中...")
+        p_bar = st.progress(0, text="深度建模分析中...")
         for p in range(0, 101, 10): time.sleep(0.05); p_bar.progress(p)
         data = get_stock_data_parallel(code)
         if data["success"]:
@@ -105,33 +107,57 @@ with t1:
             res = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}])
             st.session_state.ai_cache = {"content": res.choices[0].message.content}
             p_bar.empty()
-    if st.session_state.ai_cache: st.info(st.session_state.ai_cache['content'])
+    if st.session_state.ai_cache: 
+        st.markdown("### 🏹 实战指令")
+        st.info(st.session_state.ai_cache['content'])
 
+# --- Tab 2: 实时资金雷达 (含四灯详细说明) ---
 with t2:
     placeholder = st.empty()
     def render():
         res = get_stock_data_parallel(code)
-        if not res["success"] and st.session_state.last_data: data, tag = st.session_state.last_data, "⚠️ 延迟"
-        elif res["success"]: data = st.session_state.last_data = res; tag = "🟢 实时"
+        if not res["success"] and st.session_state.last_data: data, tag = st.session_state.last_data, "⚠️ 断流保护"
+        elif res["success"]: data = st.session_state.last_data = res; tag = "🟢 实时连通"
         else: placeholder.warning("连接中..."); return
+        
         f, l = data['fund'], calculate_four_lamps(data)
+        
         with placeholder.container():
             st.caption(f"🕒 {datetime.now(CN_TZ).strftime('%H:%M:%S')} | {tag} | 🔴正面 🟢风险")
+            
+            # --- 四灯渲染 ---
             st.write("### 🚦 核心策略哨兵")
             cols = st.columns(4)
             t_list = ["趋势形态", "主力动向", "市场情绪", "筹码安全"]
             k_list = ["trend", "money", "sentiment", "safety"]
-            d_list = [("顺势多头", "重心下移"), ("主力流入", "资金流出"), ("买盘活跃", "信心不足"), ("锁定良好", "散户接盘")]
+            d_list = [("多头占优", "重心下移"), ("主力流入", "主力撤离"), ("买盘活跃", "信心不足"), ("锁仓良好", "散户接盘")]
+            
             for i, col in enumerate(cols):
                 status = l[k_list[i]]
                 color = "#ff4b4b" if status == "🔴" else "#2eb872"
                 bg = "rgba(255, 75, 75, 0.1)" if status == "🔴" else "rgba(46, 184, 114, 0.1)"
                 col.markdown(f'<div style="background-color:{bg}; padding:15px; border-radius:12px; border-top: 5px solid {color}; text-align:center;"><p style="margin:0; color:{color}; font-weight:bold;">{t_list[i]}</p><h2 style="margin:8px 0;">{status}</h2><p style="margin:0; color:{color}; font-size:11px;">{d_list[i][0] if status=="🔴" else d_list[i][1]}</p></div>', unsafe_allow_html=True)
+            
+            # --- 四灯说明文案 (新增集成) ---
+            with st.expander("📖 查看四灯量化逻辑说明", expanded=True):
+                st.markdown("""
+                | 维度 | 🔴 红色 (正面/多头) | 🟢 绿色 (负面/空头) |
+                | :--- | :--- | :--- |
+                | **趋势 (Trend)** | MA5 > MA20，攻击线有效支撑，顺势持股。 | MA5 < MA20，股价重心下移，反弹即逃命。 |
+                | **资金 (Money)** | 主力大单呈净流入状态，机构实金白银吸筹。 | 主力资金持续派发，警惕高位“倒车接人”。 |
+                | **情绪 (Sentiment)** | 实时价格上涨，场外资金抢筹意愿强烈。 | 价格处于下跌中，市场信心匮乏，卖压沉重。 |
+                | **安全 (Safety)** | 散户(小单)参与度 < 15%，筹码高度锁定。 | 散户疯狂接盘，筹码松动，极易发生踩踏。 |
+                """)
+                st.caption("🛡️ 文哥哥提醒：只做红灯共振的机会，坚决执行止损绿灯。")
+            
             st.divider()
             m1, m2 = st.columns(2)
             m1.metric("📌 当前价位", f"¥{data['price']}", f"{data['pct']}%")
             main_f = f['主力净流入-净额'] if f is not None else 0
-            m2.metric("🌊 主力净额", format_money(main_f), "流入" if float(main_f) > 0 else "流出")
+            m2.metric("🌊 主力净额", format_money(main_f), "多方发力" if float(main_f) > 0 else "空方减速")
+            
+            # --- 6大板块 ---
+            st.write("📊 **6大资金板块明细 (亿/万转换)**")
             if f is not None:
                 r1, r2 = st.columns(3), st.columns(3)
                 r1[0].metric("1. 🏢 机构", format_money(f['超大单净流入-净额']))
@@ -140,14 +166,13 @@ with t2:
                 r2[0].metric("4. 🤖 量化", "智能监控")
                 r2[1].metric("5. 🏭 产业", format_money(f['主力净流入-净额']))
                 r2[2].metric("6. 🐣 散户", f"{float(f['小单净流入-净占比']):.1f} %")
+            
+            
             st.line_chart(data['df'].set_index('日期')['收盘'], height=200)
 
     if st.session_state.auto_refresh:
         while st.session_state.auto_refresh: render(); time.sleep(1)
     else: render()
 
-with t3:
-    st.markdown("## 📜 文哥哥·私募心法")
-    
-    st.info("💡 视觉核心：遵循 A 股特色，🔴 红色代表强度与机会，🟢 绿色代表走弱与风险。")
-    st.success("🛡️ **文哥哥提醒：只做红灯共振的机会，坚决执行止损绿灯。**")
+st.divider()
+st.caption(f"文哥哥专用 | 2026-01-15 | 战术集成版")
