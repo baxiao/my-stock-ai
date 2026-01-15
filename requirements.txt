@@ -1,4 +1,5 @@
 streamlit
-akshare
-openai
+yfinance
 pandas
+plotly
+pandas_ta
