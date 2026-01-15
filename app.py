@@ -1,76 +1,163 @@
 import streamlit as st
 import re
 from datetime import datetime
+from openai import OpenAI
 
-# 页面配置
+# 页面基本設定
 st.set_page_config(
-    page_title="A股新闻利好利空分析",
+    page_title="A股新闻面AI分析 - DeepSeek",
     page_icon="🇨🇳",
-    layout="centered"
+    layout="wide"
 )
 
-st.title("🇨🇳 A股新闻面快速分析")
-st.caption("当前日期：" + datetime.now().strftime("%Y年%m月%d日") + " • 专注新闻驱动的利好/利空判断 • 示例：贵州茅台(600519)")
+st.title("🇨🇳 A股新闻面利好/利空 AI 分析")
+st.caption(
+    f"当前日期：{datetime.now().strftime('%Y年%m月%d日')}　"
+    "・ 基于 DeepSeek 模型　・ 仅供参考，非投资建议"
+)
 
-# 输入
-ticker_input = st.text_input("输入A股6位代码（例：600519）", value="600519").strip()
+# ── DeepSeek API Key ───────────────────────────────────────────────
+# 强烈建议使用 Streamlit Secrets 管理，不要把 key 直接写在代码里
+DEEPSEEK_API_KEY = st.secrets.get("DEEPSEEK_API_KEY", None)
 
-if not ticker_input:
+if not DEEPSEEK_API_KEY:
+    st.error("尚未设置 DeepSeek API Key")
+    st.markdown("""
+    请在 Streamlit Cloud → Settings → Secrets 中新增以下内容：
+    ```
+    DEEPSEEK_API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    ```
+    获取 Key：https://platform.deepseek.com/api_keys
+    """)
+    st.stop()
+
+client = OpenAI(
+    api_key=DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com"
+)
+
+# ── 输入 ──────────────────────────────────────────────────────────
+code = st.text_input(
+    "请输入A股6位代码（例如：600519、300750、000001）",
+    value="600519",
+    max_chars=6
+).strip()
+
+if not code:
     st.info("请输入6位A股代码")
     st.stop()
 
-if not re.match(r'^\d{6}$', ticker_input):
-    st.error("请输入正确的6位纯数字A股代码！")
+if not re.match(r'^\d{6}$', code):
+    st.error("请输入正确的6位纯数字A股代码")
     st.stop()
 
-# 自动补后缀并判断是否支持（目前只示例茅台）
-first_digit = ticker_input[0]
-if first_digit == '6':
-    ticker = ticker_input + ".SS"
-elif first_digit in ['0', '3']:
-    ticker = ticker_input + ".SZ"
+# 自动补后缀
+if code.startswith('6'):
+    full_symbol = code + ".SS"
+    exchange = "上海"
+elif code.startswith(('0', '3')):
+    full_symbol = code + ".SZ"
+    exchange = "深圳"
 else:
-    st.error("暂不支持该前缀的A股（仅示例6开头上证、0/3开头深证）")
+    st.error("暂不支持该前缀的A股代码（仅支持6/0/3开头）")
     st.stop()
 
-st.success(f"已识别：{ticker_input} → {ticker}")
+st.success(f"已识别：{code}　→　{full_symbol}（{exchange}证券交易所）")
 
-# ------------------- 核心分析逻辑（目前硬编码贵州茅台2026年1月最新新闻） -------------------
-if ticker_input == "600519":
-    st.markdown("### 贵州茅台 (600519) • 2026年1月新闻面分析")
+# ── 构建 Prompt ──────────────────────────────────────────────────
+prompt_template = """你是一位极其保守、经验非常丰富且从不夸大的中国A股专业分析师。
 
-    st.subheader("主要利好点（强势主导）")
-    st.markdown("""
-    - **i茅台平台极度火爆**：1499元/瓶飞天茅台自1月1日上线以来每天“秒空”，多轮补货仍供不应求，短短几天超10万用户抢购，新增用户超270万，成交用户超40万。真实消费需求强劲，品牌消费属性大幅提升。
-    - **渠道改革积极推进**：2026年市场化运营方案获通过，回归“金字塔”产品结构（塔基普飞、塔腰精品/生肖、塔尖陈年/文化），构建多元渠道（自售+经销+代售+寄售），动态价格机制。多家券商（财通、东吴、高盛等）认为有助于掌握定价权、扩大群众基础、增厚直销利润。
-    - **股价阶段性反弹+回购**：1月5日放量大涨3.54%，市值增超600亿；公司实施回购，机构维持“买入/增持”。
-    """)
+任务：根据以下信息，对该股票当前的**新闻面**进行客观、谨慎分析。
 
-    st.subheader("主要利空/压力点（短期扰动）")
-    st.markdown("""
-    - **部分产品出厂价大幅下调**：精品茅台出厂价从2969→1859元/瓶，陈年15年从5399→3409元/瓶，茅台1935打款价从798→668元/瓶。经销商利润承压，渠道调整阵痛明显。
-    - **终端批价仍承压**：飞天茅台批发价一度跌破1499元（接近1399-1520元区间），电商低价库存消化压力大。1月13日股价收跌0.86%。
-    - **行业整体景气度一般**：高端白酒商务/礼品需求疲软，库存去化缓慢。
-    """)
+【股票信息】
+代码：{code}
+名称：{name}
+行业：{industry}
 
-    st.subheader("总体判断 & 操作建议（2026年1月15日视角）")
-    st.markdown("""
-    **新闻面整体偏利好**（利好强度：8/10）  
-    核心逻辑：茅台正从“渠道/金融属性”向“消费属性”转型，主动让利消费者、打击黄牛、扩大直销。i茅台火爆是最大实证，改革阵痛属于短期过渡。
+【近期重要新闻/事件摘要】（截至 {today}）
+{news_summary}
 
-    **短期（1~4周）**：震荡概率大，价格调整阵痛+批价波动可能继续压制股价。  
-    **中期（1~3个月）**：方向偏正面，动销企稳后有望筑底反弹。
+请严格按照以下格式输出（用中文，简洁、条理清晰）：
 
-    **建议**（保守散户视角）：
-    - **中长期持有者**：**逢低分批入手或继续持有**（当前位置更像是改革买入机会）
-    - **短线/波动敏感者**：**观望为主**，等批价企稳（飞天持续站稳1500元以上）或动销数据进一步改善再考虑
-    - **一句话**：转型方向正确，阵痛期往往是机会，但别追涨杀跌。
+1. 总体新闻面判断（利好 / 利空 / 中性） + 强度打分（例如 7/10）
+2. 主要利好点（列出 2–5 条，每条简短说明）
+3. 主要利空/风险点（列出 2–5 条，每条简短说明）
+4. 短期（1–4周）大概率走势预期
+5. 中期（1–3个月）大概率走势预期
+6. 给普通散户的保守操作建议（强烈建议入手 / 建议分批入手 / 观望 / 建议减持 / 强烈建议减持 等），并简要说明理由
 
-    **免责声明**：以上纯基于公开新闻整理，非投资建议。股市风险极高，请结合自身情况独立判断。
-    """)
+语气要求：理性、谨慎、客观，避免任何绝对化语言或收益保证。
+"""
 
-else:
-    st.warning("目前仅支持贵州茅台(600519)的新闻分析示例。如需扩展其他股票，请提供具体代码，我可以帮你调整逻辑。")
+# 示例新闻数据（实际生产建议接入 akshare.stock_news_em() 或其他新闻接口）
+news_examples = {
+    "600519": {
+        "name": "贵州茅台",
+        "industry": "白酒",
+        "news_summary": """\
+1. i茅台持续火爆，1499元飞天几乎每天秒空，真实消费需求强劲
+2. 2026年市场化运营方案通过，建立多元渠道+动态价格机制
+3. 部分非标产品出厂价大幅下调，渠道短期利润承压
+4. 飞天终端批价一度跌破1499元，库存压力仍存
+5. 多家券商认为改革阵痛期是中长期布局机会"""
+    },
+    "300750": {
+        "name": "宁德时代",
+        "industry": "新能源电池",
+        "news_summary": """\
+1. 2025年前三季度净利润同比+36%，三季度单季+41%
+2. 主力资金阶段性流入，但近期也有明显净流出
+3. 碳酸锂等原材料价格震荡，毛利率面临压力
+4. 动力电池行业竞争持续加剧，下游需求预期分化
+5. 公司持续推进股份回购计划"""
+    },
+    # 你可以继续添加其他热门股票...
+}
+
+# ── 执行分析 ─────────────────────────────────────────────────────
+if st.button("开始 DeepSeek 新闻分析", type="primary"):
+    if code not in news_examples:
+        st.warning("当前暂无该股票的示例新闻数据")
+        st.info("你可以先用 600519（贵州茅台）或 300750（宁德时代）测试，\n"
+                "或自行接入 akshare.stock_news_em() 获取实时新闻")
+        st.stop()
+
+    info = news_examples[code]
+
+    prompt = prompt_template.format(
+        code=code,
+        name=info["name"],
+        industry=info["industry"],
+        news_summary=info["news_summary"],
+        today=datetime.now().strftime("%Y年%m月%d日")
+    )
+
+    with st.spinner("DeepSeek 正在分析...（通常 5–20 秒）"):
+        try:
+            response = client.chat.completions.create(
+                model="deepseek-reasoner",          # 推荐 reasoner，更适合逻辑分析
+                # model="deepseek-chat",            # 或者用 chat 版，语言更自然
+                messages=[
+                    {"role": "system", "content": "你是极其保守、理性、谨慎的中国A股分析师。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.35,
+                max_tokens=1400
+            )
+
+            result = response.choices[0].message.content.strip()
+
+            st.markdown("### DeepSeek 分析结果")
+            st.markdown(result)
+
+        except Exception as e:
+            st.error(f"DeepSeek API 调用失败：{str(e)}")
+            st.info("常见原因：\n"
+                    "1. API Key 错误或已过期\n"
+                    "2. 余额/额度不足\n"
+                    "3. 网络连接问题\n"
+                    "4. 模型名称写错（请检查是否为 deepseek-reasoner）")
 
 st.markdown("---")
-st.caption("数据来源于公开财经新闻（截至2026年1月15日），程序不接入实时API，仅供参考。")
+st.caption("提示：建议把 DEEPSEEK_API_KEY 放在 Streamlit Secrets 中管理，避免泄露。")
+st.caption("新闻内容目前为示例，生产环境强烈建议接入 akshare / tushare 等接口获取实时新闻。")
