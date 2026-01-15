@@ -1,163 +1,252 @@
 import streamlit as st
-import re
-from datetime import datetime
+import akshare as ak
+import pandas as pd
 from openai import OpenAI
+import time
+from datetime import datetime
+import pytz
+from concurrent.futures import ThreadPoolExecutor
 
-# 页面基本設定
-st.set_page_config(
-    page_title="A股新闻面AI分析 - DeepSeek",
-    page_icon="🇨🇳",
-    layout="wide"
-)
+# --- 1. 页面配置 ---
+st.set_page_config(page_title="文哥哥极速终端", page_icon="🚀", layout="wide")
 
-st.title("🇨🇳 A股新闻面利好/利空 AI 分析")
-st.caption(
-    f"当前日期：{datetime.now().strftime('%Y年%m月%d日')}　"
-    "・ 基于 DeepSeek 模型　・ 仅供参考，非投资建议"
-)
+# --- 2. 初始化持久化状态 ---
+if 'ai_cache' not in st.session_state: st.session_state.ai_cache = None
+if 'last_data' not in st.session_state: st.session_state.last_data = None
+if 'last_code' not in st.session_state: st.session_state.last_code = ""
+if 'auto_refresh' not in st.session_state: st.session_state.auto_refresh = False
 
-# ── DeepSeek API Key ───────────────────────────────────────────────
-# 强烈建议使用 Streamlit Secrets 管理，不要把 key 直接写在代码里
-DEEPSEEK_API_KEY = st.secrets.get("DEEPSEEK_API_KEY", None)
+CN_TZ = pytz.timezone('Asia/Shanghai')
 
-if not DEEPSEEK_API_KEY:
-    st.error("尚未设置 DeepSeek API Key")
-    st.markdown("""
-    请在 Streamlit Cloud → Settings → Secrets 中新增以下内容：
-    ```
-    DEEPSEEK_API_KEY = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-    ```
-    获取 Key：https://platform.deepseek.com/api_keys
-    """)
-    st.stop()
+# --- 3. 核心工具函数 ---
+def format_money(value_str):
+    """智能单位转换：亿/万自动切换"""
+    try:
+        val = float(value_str)
+        abs_val = abs(val)
+        if abs_val >= 100000000:
+            return f"{val / 100000000:.2f} 亿"
+        else:
+            return f"{val / 10000:.1f} 万"
+    except:
+        return "N/A"
 
-client = OpenAI(
-    api_key=DEEPSEEK_API_KEY,
-    base_url="https://api.deepseek.com"
-)
+# --- 4. 多线程数据引擎 ---
+def fetch_hist_data(code):
+    return ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq").tail(30)
 
-# ── 输入 ──────────────────────────────────────────────────────────
-code = st.text_input(
-    "请输入A股6位代码（例如：600519、300750、000001）",
-    value="600519",
-    max_chars=6
-).strip()
+def fetch_fund_flow(code):
+    mkt = "sh" if code.startswith(('6', '9', '688')) else "sz"
+    return ak.stock_individual_fund_flow(stock=code, market=mkt)
 
-if not code:
-    st.info("请输入6位A股代码")
-    st.stop()
+@st.cache_data(ttl=2)
+def get_stock_complete_data(code):
+    """使用线程池并发抓取数据，提升响应速度"""
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_hist = executor.submit(fetch_hist_data, code)
+            future_fund = executor.submit(fetch_fund_flow, code)
+            
+            df_hist = future_hist.result()
+            df_fund = future_fund.result()
 
-if not re.match(r'^\d{6}$', code):
-    st.error("请输入正确的6位纯数字A股代码")
-    st.stop()
+        if df_hist.empty:
+            return {"success": False, "msg": "未找到代码"}
+        
+        fund = df_fund.iloc[0] if not df_fund.empty else None
+        
+        return {
+            "success": True, 
+            "price": df_hist.iloc[-1]['收盘'], 
+            "pct": df_hist.iloc[-1]['涨跌幅'],
+            "vol": df_hist.iloc[-1]['成交额'],
+            "fund": fund, 
+            "df": df_hist
+        }
+    except Exception as e:
+        return {"success": False, "msg": f"接口繁忙: {str(e)}"}
 
-# 自动补后缀
-if code.startswith('6'):
-    full_symbol = code + ".SS"
-    exchange = "上海"
-elif code.startswith(('0', '3')):
-    full_symbol = code + ".SZ"
-    exchange = "深圳"
-else:
-    st.error("暂不支持该前缀的A股代码（仅支持6/0/3开头）")
-    st.stop()
-
-st.success(f"已识别：{code}　→　{full_symbol}（{exchange}证券交易所）")
-
-# ── 构建 Prompt ──────────────────────────────────────────────────
-prompt_template = """你是一位极其保守、经验非常丰富且从不夸大的中国A股专业分析师。
-
-任务：根据以下信息，对该股票当前的**新闻面**进行客观、谨慎分析。
-
-【股票信息】
-代码：{code}
-名称：{name}
-行业：{industry}
-
-【近期重要新闻/事件摘要】（截至 {today}）
-{news_summary}
-
-请严格按照以下格式输出（用中文，简洁、条理清晰）：
-
-1. 总体新闻面判断（利好 / 利空 / 中性） + 强度打分（例如 7/10）
-2. 主要利好点（列出 2–5 条，每条简短说明）
-3. 主要利空/风险点（列出 2–5 条，每条简短说明）
-4. 短期（1–4周）大概率走势预期
-5. 中期（1–3个月）大概率走势预期
-6. 给普通散户的保守操作建议（强烈建议入手 / 建议分批入手 / 观望 / 建议减持 / 强烈建议减持 等），并简要说明理由
-
-语气要求：理性、谨慎、客观，避免任何绝对化语言或收益保证。
-"""
-
-# 示例新闻数据（实际生产建议接入 akshare.stock_news_em() 或其他新闻接口）
-news_examples = {
-    "600519": {
-        "name": "贵州茅台",
-        "industry": "白酒",
-        "news_summary": """\
-1. i茅台持续火爆，1499元飞天几乎每天秒空，真实消费需求强劲
-2. 2026年市场化运营方案通过，建立多元渠道+动态价格机制
-3. 部分非标产品出厂价大幅下调，渠道短期利润承压
-4. 飞天终端批价一度跌破1499元，库存压力仍存
-5. 多家券商认为改革阵痛期是中长期布局机会"""
-    },
-    "300750": {
-        "name": "宁德时代",
-        "industry": "新能源电池",
-        "news_summary": """\
-1. 2025年前三季度净利润同比+36%，三季度单季+41%
-2. 主力资金阶段性流入，但近期也有明显净流出
-3. 碳酸锂等原材料价格震荡，毛利率面临压力
-4. 动力电池行业竞争持续加剧，下游需求预期分化
-5. 公司持续推进股份回购计划"""
-    },
-    # 你可以继续添加其他热门股票...
-}
-
-# ── 执行分析 ─────────────────────────────────────────────────────
-if st.button("开始 DeepSeek 新闻分析", type="primary"):
-    if code not in news_examples:
-        st.warning("当前暂无该股票的示例新闻数据")
-        st.info("你可以先用 600519（贵州茅台）或 300750（宁德时代）测试，\n"
-                "或自行接入 akshare.stock_news_em() 获取实时新闻")
-        st.stop()
-
-    info = news_examples[code]
-
-    prompt = prompt_template.format(
-        code=code,
-        name=info["name"],
-        industry=info["industry"],
-        news_summary=info["news_summary"],
-        today=datetime.now().strftime("%Y年%m月%d日")
-    )
-
-    with st.spinner("DeepSeek 正在分析...（通常 5–20 秒）"):
+# --- 5. 四灯量化算法 ---
+def calculate_four_lamps(data):
+    if not data or not data.get('success'):
+        return {"trend": "⚪", "money": "⚪", "sentiment": "⚪", "safety": "⚪"}
+    df = data['df']
+    fund = data['fund']
+    ma5 = df['收盘'].tail(5).mean()
+    ma20 = df['收盘'].tail(20).mean()
+    
+    # 🔴正面/强势  🟢负面/风险
+    trend_lamp = "🔴" if ma5 > ma20 else "🟢"
+    money_lamp = "🟢"
+    if fund is not None:
+        if "-" not in str(fund['主力净流入-净额']): money_lamp = "🔴"
+    sentiment_lamp = "🔴" if data['pct'] > 0 else "🟢"
+    safety_lamp = "🟢"
+    if fund is not None:
         try:
+            # 散户流出（负值）或占比极低为🔴安全
+            if float(fund['小单净流入-净占比']) < 15: safety_lamp = "🔴"
+        except: pass
+    return {"trend": trend_lamp, "money": money_lamp, "sentiment": sentiment_lamp, "safety": safety_lamp}
+
+# --- 6. 权限验证 (API Key模式) ---
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+
+if not st.session_state['logged_in']:
+    st.title("🔐 私人量化终端授权")
+    pwd = st.text_input("请输入访问密钥", type="password")
+    if st.button("开启终端", use_container_width=True):
+        if "access_password" in st.secrets and pwd == st.secrets["access_password"]:
+            st.session_state['logged_in'] = True
+            st.rerun()
+        else:
+            st.error("密钥无效")
+    st.stop()
+
+client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
+
+# --- 7. 侧边栏 ---
+with st.sidebar:
+    st.title("🚀 控制中心")
+    code = st.text_input("股票代码", value="600519").strip()
+    if code != st.session_state.last_code:
+        st.session_state.last_code = code
+        st.session_state.ai_cache = None
+        st.session_state.last_data = None
+    
+    st.divider()
+    st.session_state.auto_refresh = st.checkbox("🔄 开启秒级实时刷新", value=st.session_state.auto_refresh)
+    
+    st.divider()
+    if st.button("🔴 退出系统"):
+        st.session_state['logged_in'] = False
+        st.rerun()
+
+st.title(f"📈 文哥哥 AI 终端: {code}")
+tab1, tab2, tab3 = st.tabs(["🧠 AI 深度决策", "🎯 实时资金雷达", "📜 文哥哥·私募心法"])
+
+# --- Tab 1: AI 深度决策 (线程保护+专业模型) ---
+with tab1:
+    if st.button("🚀 启动全维度 AI 建模分析", use_container_width=True):
+        progress_text = "多线程算力调取中..."
+        my_bar = st.progress(0, text=progress_text)
+        
+        for p in range(0, 101, 10):
+            time.sleep(0.05)
+            my_bar.progress(p, text=progress_text)
+        
+        data = get_stock_complete_data(code)
+        if data["success"]:
+            lamps = calculate_four_lamps(data)
+            lamp_str = f"趋势:{lamps['trend']}, 资金:{lamps['money']}, 情绪:{lamps['sentiment']}, 安全:{lamps['safety']}"
+            
+            # 增强型 Prompt：引入私募博弈视角
+            prompt = f"""
+            你是一位年化收益50%以上的私募操盘手，请对股票 {code} 进行深度复盘。
+            当前数据：价格 {data['price']}, 涨跌幅 {data['pct']}%, 四灯状态 {lamp_str}。
+            请结合以下维度给出结论：
+            1. 筹码博弈：主力是否在进行“黄金坑”洗盘或高位“倒车接人”？
+            2. 信号强度：如果四灯中出现红绿交替，是背离还是修复？
+            3. 实战指令：给出明确的【买点/持股/卖点】参考位。
+            4. 风险警示：当前最可能导致绿灯亮的突发因素。
+            注意：严格遵循红涨绿跌、红强绿弱的逻辑。
+            """
+            
             response = client.chat.completions.create(
-                model="deepseek-reasoner",          # 推荐 reasoner，更适合逻辑分析
-                # model="deepseek-chat",            # 或者用 chat 版，语言更自然
-                messages=[
-                    {"role": "system", "content": "你是极其保守、理性、谨慎的中国A股分析师。"},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.35,
-                max_tokens=1400
+                model="deepseek-chat",
+                messages=[{"role": "system", "content": "你是文哥哥的首席私募量化分析师。"}, {"role": "user", "content": prompt}]
             )
+            st.session_state.ai_cache = {"content": response.choices[0].message.content}
+            my_bar.empty()
+            st.success("决策建议已更新")
+            
+    if st.session_state.ai_cache:
+        st.markdown(st.session_state.ai_cache['content'])
 
-            result = response.choices[0].message.content.strip()
+# --- Tab 2: 实时资金雷达 (无闪烁+智能单位) ---
+with tab2:
+    monitor_placeholder = st.empty()
+    
+    def render_dashboard():
+        res = get_stock_complete_data(code)
+        if not res["success"] and st.session_state.last_data:
+            data = st.session_state.last_data
+            status_tag = "⚠️ 断流保护"
+        elif res["success"]:
+            data = res
+            st.session_state.last_data = res
+            status_tag = "🟢 线程连通"
+        else:
+            monitor_placeholder.warning("正在并发采集数据...")
+            return
 
-            st.markdown("### DeepSeek 分析结果")
-            st.markdown(result)
+        f = data['fund']
+        lamps = calculate_four_lamps(data)
+        bj_time = datetime.now(CN_TZ).strftime('%H:%M:%S')
+        
+        with monitor_placeholder.container():
+            st.caption(f"🕒 北京时间: {bj_time} | {status_tag} | 🔴正面 🟢风险")
+            
+            st.write("### 🚦 核心策略哨兵")
+            l1, l2, l3, l4 = st.columns(4)
+            def draw_lamp(col, title, status, desc_red, desc_green):
+                color = "#ff4b4b" if status == "🔴" else "#2eb872"
+                bg = "rgba(255, 75, 75, 0.1)" if status == "🔴" else "rgba(46, 184, 114, 0.1)"
+                col.markdown(f"""
+                    <div style="background-color:{bg}; padding:15px; border-radius:12px; border-top: 5px solid {color}; text-align:center;">
+                        <p style="margin:0; color:{color}; font-size:13px; font-weight:bold;">{title}</p>
+                        <h2 style="margin:8px 0;">{status}</h2>
+                        <p style="margin:0; color:{color}; font-size:11px;">{desc_red if status=='🔴' else desc_green}</p>
+                    </div>
+                """, unsafe_allow_html=True)
 
-        except Exception as e:
-            st.error(f"DeepSeek API 调用失败：{str(e)}")
-            st.info("常见原因：\n"
-                    "1. API Key 错误或已过期\n"
-                    "2. 余额/额度不足\n"
-                    "3. 网络连接问题\n"
-                    "4. 模型名称写错（请检查是否为 deepseek-reasoner）")
+            draw_lamp(l1, "趋势形态", lamps['trend'], "顺势多头", "重心下移")
+            draw_lamp(l2, "主力动向", lamps['money'], "主力流入", "资金流出")
+            draw_lamp(l3, "市场情绪", lamps['sentiment'], "买盘活跃", "信心不足")
+            draw_lamp(l4, "筹码安全", lamps['safety'], "锁定良好", "散户接盘")
 
-st.markdown("---")
-st.caption("提示：建议把 DEEPSEEK_API_KEY 放在 Streamlit Secrets 中管理，避免泄露。")
-st.caption("新闻内容目前为示例，生产环境强烈建议接入 akshare / tushare 等接口获取实时新闻。")
+            st.write("---")
+            m1, m2 = st.columns(2)
+            m1.metric("📌 当前价位", f"¥{data['price']}", f"{data['pct']}%")
+            main_f = data['fund']['主力净流入-净额'] if data['fund'] is not None else 0
+            m2.metric("🌊 主力净额", format_money(main_f), "多方发力" if float(main_f) > 0 else "空方减速")
+            
+            st.write("---")
+            st.write("📊 **6大资金板块明细 (亿/万自动转换)**")
+            if f is not None:
+                r1_c1, r1_c2, r1_c3 = st.columns(3)
+                r2_c1, r2_c2, r2_c3 = st.columns(3)
+                r1_c1.metric("🏢 机构投资者", format_money(f['超大单净流入-净额']))
+                r1_c2.metric("🔥 游资动向", format_money(f['大单净流入-净额']))
+                r1_c3.metric("🐂 大户牛散", format_money(f['中单净流入-净额']))
+                r2_c1.metric("🤖 量化资金", "智能监控中")
+                r2_c2.metric("🏭 产业资金", format_money(f['主力净流入-净额']))
+                r2_c3.metric("🐣 散户群体", f"{float(f['小单净流入-净占比']):.1f} %")
+            
+            st.line_chart(data['df'].set_index('日期')['收盘'], height=200)
+
+    if st.session_state.auto_refresh:
+        while st.session_state.auto_refresh:
+            render_dashboard()
+            time.sleep(1)
+    else:
+        render_dashboard()
+
+# --- Tab 3: 文哥哥·私募心法 (逻辑解析) ---
+with tab3:
+    st.markdown("## 📜 文哥哥·私募心法")
+    
+    st.info("💡 视觉核心：遵循 A 股特色，🔴 红色代表强度与机会，🟢 绿色代表走弱与风险。")
+    st.write("---")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### **📈 趋势灯**：判死生。红灯是波段护城河。")
+        st.markdown("#### **💰 资金灯**：辨真伪。红灯代表真金白银。")
+    with col2:
+        st.markdown("#### **🎭 情绪灯**：看人气。红灯是进场冲锋号。")
+        st.markdown("#### **🛡️ 安全灯**：测底盘。红灯意味着筹码锁定。")
+    st.success("🛡️ **文哥哥提醒：只做四灯红共振，坚决执行止损绿。**")
+
+st.divider()
+st.caption(f"文哥哥专用 | 2026.01.12 | 多线程并发决策版")
