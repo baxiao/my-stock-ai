@@ -1,226 +1,188 @@
 import streamlit as st
-import akshare as ak
+import yfinance as yf
 import pandas as pd
-from openai import OpenAI
-import time
-from datetime import datetime
-import pytz
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import pandas_ta as ta
 
-# --- 1. 页面配置 ---
-st.set_page_config(page_title="文哥哥极速终端", page_icon="🚀", layout="wide")
+# -------------------------------
+# 页面配置
+# -------------------------------
+st.set_page_config(
+    page_title="简易股票分析工具",
+    page_icon="📈",
+    layout="wide"
+)
 
-# --- 2. 初始化持久化状态 ---
-if 'ai_cache' not in st.session_state: st.session_state.ai_cache = None
-if 'last_data' not in st.session_state: st.session_state.last_data = None
-if 'last_code' not in st.session_state: st.session_state.last_code = ""
-if 'auto_refresh' not in st.session_state: st.session_state.auto_refresh = False
+st.title("📊 简易股票分析工具（yfinance + Streamlit）")
+st.markdown("支持美股、A股、港股等几乎所有 yfinance 可取得的标的")
 
-CN_TZ = pytz.timezone('Asia/Shanghai')
-
-# --- 3. 核心辅助函数：智能单位转换 ---
-def format_money(value_str):
-    try:
-        val = float(value_str)
-        abs_val = abs(val)
-        if abs_val >= 100000000: # 超过1亿
-            return f"{val / 100000000:.2f} 亿"
-        else: # 万元单位
-            return f"{val / 10000:.1f} 万"
-    except:
-        return "N/A"
-
-# --- 4. 核心数据引擎 ---
-@st.cache_data(ttl=2)
-def get_stock_all_data(code):
-    try:
-        df_hist = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="qfq").tail(30)
-        if df_hist.empty: return {"success": False, "msg": "未找到代码"}
-        
-        fund = None
-        try:
-            mkt = "sh" if code.startswith(('6', '9', '688')) else "sz"
-            df_fund = ak.stock_individual_fund_flow(stock=code, market=mkt)
-            if not df_fund.empty: fund = df_fund.iloc[0]
-        except: pass 
-            
-        return {
-            "success": True, 
-            "price": df_hist.iloc[-1]['收盘'], 
-            "pct": df_hist.iloc[-1]['涨跌幅'],
-            "fund": fund, 
-            "df": df_hist
-        }
-    except Exception as e:
-        return {"success": False, "msg": "数据源繁忙"}
-
-# --- 5. 四灯算法逻辑 (🔴正面/强, 🟢负面/弱) ---
-def calculate_four_lamps(data):
-    if not data or not data.get('success'):
-        return {"trend": "⚪", "money": "⚪", "sentiment": "⚪", "safety": "⚪"}
-    df = data['df']
-    fund = data['fund']
-    ma5 = df['收盘'].tail(5).mean()
-    ma20 = df['收盘'].tail(20).mean()
-    
-    trend_lamp = "🔴" if ma5 > ma20 else "🟢"
-    money_lamp = "🟢"
-    if fund is not None:
-        if "-" not in str(fund['主力净流入-净额']): money_lamp = "🔴"
-    sentiment_lamp = "🔴" if data['pct'] > 0 else "🟢"
-    safety_lamp = "🟢"
-    if fund is not None:
-        try:
-            if float(fund['小单净流入-净占比']) < 20: safety_lamp = "🔴"
-        except: pass
-    return {"trend": trend_lamp, "money": money_lamp, "sentiment": sentiment_lamp, "safety": safety_lamp}
-
-# --- 6. 权限验证 ---
-if 'logged_in' not in st.session_state:
-    st.session_state['logged_in'] = False
-
-if not st.session_state['logged_in']:
-    st.title("🔐 私人终端授权访问")
-    pwd = st.text_input("请输入访问密钥", type="password")
-    if st.button("开启终端", use_container_width=True):
-        if "access_password" in st.secrets and pwd == st.secrets["access_password"]:
-            st.session_state['logged_in'] = True
-            st.rerun()
-        else:
-            st.error("密钥无效")
-    st.stop()
-
-client = OpenAI(api_key=st.secrets["deepseek_api_key"], base_url="https://api.deepseek.com")
-
-# --- 7. 侧边栏 ---
+# -------------------------------
+# 侧边栏 - 参数选择
+# -------------------------------
 with st.sidebar:
-    st.title("🚀 控制中心")
-    code = st.text_input("股票代码", value="600519").strip()
-    if code != st.session_state.last_code:
-        st.session_state.last_code = code
-        st.session_state.ai_cache = None
-        st.session_state.last_data = None
+    st.header("分析参数")
     
-    st.divider()
-    st.session_state.auto_refresh = st.checkbox("🔄 开启秒级实时刷新", value=st.session_state.auto_refresh)
+    ticker = st.text_input("输入股票代码", value="AAPL").upper().strip()
+    # 常见A股/港股例子提示
+    st.markdown("""
+    常见代码示例：
+    - 美股：AAPL, TSLA, NVDA, MSFT
+    - A股：600519.SS（贵州茅台）, 000001.SZ（平安银行）
+    - 港股：0700.HK（腾讯）, 9988.HK（阿里巴巴）
+    """)
     
-    st.divider()
-    if st.button("🔴 退出系统"):
-        st.session_state['logged_in'] = False
-        st.rerun()
+    period = st.selectbox(
+        "数据区间",
+        ["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"],
+        index=3
+    )
+    
+    interval = st.selectbox(
+        "K线周期",
+        ["1d", "1wk", "1mo"],
+        index=0
+    )
+    
+    show_volume = st.checkbox("显示成交量", value=True)
+    show_bb = st.checkbox("显示布林带", value=True)
+    show_macd = st.checkbox("显示MACD", value=True)
+    show_rsi = st.checkbox("显示RSI", value=True)
 
-st.title(f"📈 文哥哥 AI 终端: {code}")
-tab1, tab2, tab3 = st.tabs(["🧠 AI 深度决策", "🎯 实时资金雷达", "📜 文哥哥·私募心法"])
-
-# --- Tab 1: AI 决策 ---
-with tab1:
-    if st.button("🚀 启动全维度 AI 建模", use_container_width=True):
-        progress_text = "正在调取深度量化算力分析中..."
-        my_bar = st.progress(0, text=progress_text)
-        for percent in range(0, 101, 5):
-            time.sleep(0.05)
-            my_bar.progress(percent, text=progress_text)
-        
-        data = get_stock_all_data(code)
-        if data["success"]:
-            lamps = calculate_four_lamps(data)
-            lamp_str = f"趋势:{lamps['trend']}, 资金:{lamps['money']}, 情绪:{lamps['sentiment']}, 安全:{lamps['safety']}"
-            prompt = f"分析股票 {code}。价格:{data['price']}, 四灯状态:{lamp_str}。请按决策、预测、空间、总结分析。"
-            response = client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[{"role": "system", "content": "你资深私募量化师。"}, {"role": "user", "content": prompt}]
+# -------------------------------
+# 主程序逻辑
+# -------------------------------
+if ticker:
+    try:
+        with st.spinner(f"正在获取 {ticker} 数据..."):
+            # 下载数据
+            df = yf.download(
+                ticker,
+                period=period,
+                interval=interval,
+                progress=False,
+                auto_adjust=True
             )
-            st.session_state.ai_cache = {"content": response.choices[0].message.content}
-            my_bar.empty()
-    if st.session_state.ai_cache:
-        st.markdown(st.session_state.ai_cache['content'])
-
-# --- Tab 2: 实时资金雷达 ---
-with tab2:
-    monitor_placeholder = st.empty()
-    
-    def render_dashboard():
-        res = get_stock_all_data(code)
-        if not res["success"] and st.session_state.last_data:
-            data = st.session_state.last_data
-            status_tag = "⚠️ 延迟数据"
-        elif res["success"]:
-            data = res
-            st.session_state.last_data = res
-            status_tag = "🟢 实时连通"
-        else:
-            monitor_placeholder.warning("正在连接卫星数据源...")
-            return
-
-        f = data['fund']
-        lamps = calculate_four_lamps(data)
-        bj_time = datetime.now(CN_TZ).strftime('%H:%M:%S')
+            
+            if df.empty:
+                st.error(f"无法获取 {ticker} 的数据！请检查代码是否正确或网络连接。")
+                st.stop()
+                
+            # 计算技术指标
+            df['SMA20'] = ta.sma(df['Close'], length=20)
+            df['SMA50'] = ta.sma(df['Close'], length=50)
+            df['SMA200'] = ta.sma(df['Close'], length=200)
+            
+            bbands = ta.bbands(df['Close'], length=20, std=2)
+            if bbands is not None and not bbands.empty:
+                df = pd.concat([df, bbands], axis=1)
+            
+            macd = ta.macd(df['Close'])
+            if macd is not None and not macd.empty:
+                df = pd.concat([df, macd], axis=1)
+                
+            df['RSI'] = ta.rsi(df['Close'], length=14)
+            
+            # 最新数据
+            latest = df.iloc[-1]
+            
+        # -------------------------------
+        # 基本信息卡片
+        # -------------------------------
+        col1, col2, col3, col4 = st.columns(4)
         
-        with monitor_placeholder.container():
-            st.caption(f"🕒 北京时间: {bj_time} | {status_tag} | 🔴正面 🟢风险")
+        price_change = latest['Close'] - df.iloc[-2]['Close']
+        pct_change = price_change / df.iloc[-2]['Close'] * 100
+        
+        col1.metric("最新收盘价", f"{latest['Close']:.2f}", 
+                   f"{price_change:+.2f} ({pct_change:+.2f}%)")
+        
+        col2.metric("最高/最低(区间)", 
+                   f"{df['High'].max():.2f} / {df['Low'].min():.2f}")
+        
+        col3.metric("成交量(最新)", f"{latest['Volume']:,.0f}")
+        
+        info = yf.Ticker(ticker).info
+        if 'marketCap' in info:
+            col4.metric("市值", f"{info.get('marketCap',0)/1e9:.1f}B")
+        
+        # -------------------------------
+        # K线主图
+        # -------------------------------
+        st.subheader("K线图 + 技术指标")
+        
+        fig = make_subplots(
+            rows=3 if show_macd or show_rsi else 2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.08,
+            row_heights=[0.60, 0.20, 0.20],
+            subplot_titles=("价格与均线/布林带", "成交量" if show_volume else "", "MACD / RSI")
+        )
+        
+        # K线
+        fig.add_trace(
+            go.Candlestick(
+                x=df.index,
+                open=df['Open'], high=df['High'],
+                low=df['Low'], close=df['Close'],
+                name='K线',
+                increasing_line_color='red', decreasing_line_color='green'
+            ),
+            row=1, col=1
+        )
+        
+        # 均线
+        for ma, color in [('SMA20', '#00CC94'), ('SMA50', '#FF6B6B'), ('SMA200', '#4D96FF')]:
+            if ma in df.columns and df[ma].notna().any():
+                fig.add_trace(
+                    go.Scatter(x=df.index, y=df[ma], name=ma, line=dict(color=color)),
+                    row=1, col=1
+                )
+        
+        # 布林带
+        if show_bb and all(col in df.columns for col in ['BBL_20_2.0', 'BBM_20_2.0', 'BBU_20_2.0']):
+            fig.add_trace(go.Scatter(x=df.index, y=df['BBU_20_2.0'], 
+                                    name='布林上轨', line=dict(color='#FFD93D', dash='dash')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['BBL_20_2.0'], 
+                                    name='布林下轨', line=dict(color='#FFD93D', dash='dash'),
+                                    fill='tonexty', fillcolor='rgba(255,217,61,0.08)'), row=1, col=1)
+        
+        # 成交量
+        if show_volume:
+            fig.add_trace(
+                go.Bar(x=df.index, y=df['Volume'], name='成交量', marker_color='rgba(100,149,237,0.6)'),
+                row=2, col=1
+            )
+        
+        # MACD
+        if show_macd and all(col in df.columns for col in ['MACD_12_26_9', 'MACDs_12_26_9', 'MACDh_12_26_9']):
+            fig.add_trace(go.Scatter(x=df.index, y=df['MACD_12_26_9'], name='MACD', line=dict(color='#2962FF')), row=3, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['MACDs_12_26_9'], name='Signal', line=dict(color='#FF5252')), row=3, col=1)
+            fig.add_trace(go.Bar(x=df.index, y=df['MACDh_12_26_9'], name='Histogram', marker_color='#26A69A'), row=3, col=1)
+        
+        # RSI
+        if show_rsi and 'RSI' in df.columns:
+            row_idx = 3 if show_macd else 2
+            fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI(14)', line=dict(color='#AB47BC')), row=row_idx, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=row_idx, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="green", row=row_idx, col=1)
+        
+        fig.update_layout(
+            height=900,
+            showlegend=True,
+            xaxis_rangeslider_visible=False,
+            template="plotly_dark" if st.session_state.get('theme') == 'dark' else "plotly_white"
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # 数据表格（可选）
+        if st.checkbox("显示原始数据表（最近100条）", value=False):
+            st.dataframe(df.tail(100))
             
-            st.write("### 🚦 核心策略哨兵")
-            l1, l2, l3, l4 = st.columns(4)
-            def draw_lamp(col, title, status, desc_red, desc_green):
-                color = "#ff4b4b" if status == "🔴" else "#2eb872"
-                bg = "rgba(255, 75, 75, 0.1)" if status == "🔴" else "rgba(46, 184, 114, 0.1)"
-                col.markdown(f"""
-                    <div style="background-color:{bg}; padding:15px; border-radius:12px; border-top: 5px solid {color}; text-align:center;">
-                        <p style="margin:0; color:{color}; font-size:13px; font-weight:bold;">{title}</p>
-                        <h2 style="margin:8px 0;">{status}</h2>
-                        <p style="margin:0; color:{color}; font-size:11px;">{desc_red if status=='🔴' else desc_green}</p>
-                    </div>
-                """, unsafe_allow_html=True)
-
-            draw_lamp(l1, "趋势形态", lamps['trend'], "顺势多头", "重心下移")
-            draw_lamp(l2, "主力动向", lamps['money'], "主力流入", "主力撤离")
-            draw_lamp(l3, "市场情绪", lamps['sentiment'], "买盘活跃", "信心不足")
-            draw_lamp(l4, "筹码安全", lamps['safety'], "高度锁定", "散户接盘")
-
-            st.write("---")
-            m1, m2 = st.columns(2)
-            m1.metric("📌 当前价位", f"¥{data['price']}", f"{data['pct']}%")
-            # 主力净额单位智能转换
-            f_main = data['fund']['主力净流入-净额'] if data['fund'] is not None else 0
-            m2.metric("🌊 主力净额", format_money(f_main), "多方占优" if float(f_main) > 0 else "空方占优")
-            
-            st.write("---")
-            st.write("📊 **6大资金板块明细 (自动单位)**")
-            if f is not None:
-                r1_c1, r1_c2, r1_c3 = st.columns(3)
-                r2_c1, r2_c2, r2_c3 = st.columns(3)
-                
-                r1_c1.metric("🏢 机构投资者", format_money(f['超大单净流入-净额']))
-                r1_c2.metric("🔥 游资动向", format_money(f['大单净流入-净额']))
-                r1_c3.metric("🐂 大户牛散", format_money(f['中单净流入-净额']))
-                
-                r2_c1.metric("🤖 量化资金", "实时监控中")
-                r2_c2.metric("🏭 产业资金", format_money(f['主力净流入-净额']))
-                r2_c3.metric("🐣 散户群体", f"{float(f['小单净流入-净占比']):.1f} %")
-            
-            st.line_chart(data['df'].set_index('日期')['收盘'], height=200)
-
-    if st.session_state.auto_refresh:
-        while st.session_state.auto_refresh:
-            render_dashboard()
-            time.sleep(1)
-    else:
-        render_dashboard()
-        if st.button("🔄 手动同步最新数据"): render_dashboard()
-
-# --- Tab 3: 文哥哥·私募心法 ---
-with tab3:
-    st.markdown("## 📜 文哥哥·私募心法")
-    
-    st.info("💡 视觉核心：遵循 A 股特色，🔴 红色代表强度与机会，🟢 绿色代表走弱与风险。")
-    st.write("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("#### **1. 📈 趋势灯**\n- **🔴 红色**：多头走强。\n- **🟢 绿色**：趋势破位。")
-        st.markdown("#### **2. 💰 资金灯**\n- **🔴 红色**：主力进场。\n- **🟢 绿色**：主力出逃。")
-    with col2:
-        st.markdown("#### **3. 🎭 情绪灯**\n- **🔴 红色**：交投火热。\n- **🟢 绿色**：冰点观望。")
-        st.markdown("#### **4. 🛡️ 安全灯**\n- **🔴 红色**：筹码稳定。\n- **🟢 绿色**：散户接盘。")
-    st.success("🛡️ **文哥哥提醒：只做红灯共振的机会，坚决远离绿灯密集的区域。**")
-
-st.divider()
-st.caption(f"文哥哥专用 | 2026.01.12 | 亿/万智能切换版")
+    except Exception as e:
+        st.error(f"发生错误：{e}")
+        st.info("常见原因：网络问题、代码错误、该股票暂无数据、Yahoo接口临时故障等")
+else:
+    st.info("请输入股票代码开始分析～")
