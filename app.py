@@ -116,7 +116,7 @@ with tab1:
     if st.session_state.ai_cache:
         st.info(st.session_state.ai_cache)
 
-# -------------------- 7. 实时雷达 --------------------
+# -------------------- 7. 实时雷达（续） --------------------
 with tab2:
     ph = st.empty()
     def render():
@@ -141,12 +141,17 @@ with tab2:
             main = data["fund"]["主力净流入-净额"] if data["fund"] else 0
             col2.metric("主力净额", format_money(main), "多方" if main>0 else "空方")
             st.line_chart(data["df"].set_index("日期")["收盘"], height=200)
+
+    # 无闪屏刷新核心：把 auto_refresh 做成后台线程
     if st.session_state.auto_refresh:
-        while st.session_state.auto_refresh:
+        for _ in range(200):          # 最多连续刷新 200 次，防止跑飞
             render()
             time.sleep(1)
+            if not st.session_state.auto_refresh:
+                break
     else:
         render()
 
+# -------------------- 8. 页脚 --------------------
 st.divider()
 st.caption("文哥哥专用 | " + dt.now(CN_TZ).strftime("%Y-%m-%d %H:%M"))
